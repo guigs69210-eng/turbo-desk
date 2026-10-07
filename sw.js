@@ -1,5 +1,5 @@
 /* Cache de la coquille de l'app seulement (code public). Aucune donnée, aucun appel GitHub n'est mis en cache. */
-const V = 'td-v5';
+const V = 'td-v6';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'calc.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {

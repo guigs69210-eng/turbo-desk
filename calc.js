@@ -91,7 +91,8 @@
     if (clotureSansDetail) qRestante = 0;
     if (!qteConnue) realise = recupere - investi;       // fiches en montants seuls : tout est vendu
     let statut;
-    if (qteConnue) statut = qRestante > 1e-9 ? 'ouverte' : 'fermee';
+    if (!exs.length) statut = 'annulee';            // toutes les lignes annulées : hors journal et hors stats
+    else if (qteConnue) statut = qRestante > 1e-9 ? 'ouverte' : 'fermee';
     else statut = recupere > 0 || exs.some((e) => e.type === 'vente') ? 'fermee' : 'ouverte';
     const coutRestant = pru != null && qRestante > 0 ? pru * qRestante : 0;
     return {
