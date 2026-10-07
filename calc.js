@@ -27,7 +27,12 @@
   };
 
   // Règles privées (poche, mise) lues dans turbo-brief au démarrage de l'app.
-  function configurer(regles) { Object.assign(REGLES, regles || {}); return REGLES; }
+  function configurer(regles) {
+    Object.assign(REGLES, regles || {});
+    const f = regles && regles.financement;
+    if (f) for (const d of ['USD', 'EUR']) if (f[d]) Object.assign(FINANCEMENT[d], f[d]);
+    return REGLES;
+  }
 
   const sgn = (sens) => (String(sens).toUpperCase() === 'PUT' ? -1 : 1);
   const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
@@ -58,11 +63,14 @@
     return e.type === 'achat' ? brut + frais : brut - frais;
   }
 
+  // Une exécution corrigée n'est jamais effacée : elle est marquée `annulee` et le calcul l'ignore.
+  const actives = (p) => (p.executions || []).filter((e) => !e.annulee);
+
   // Bilan d'une position à partir de ses exécutions (PRU pondéré, P&L réalisé, quantité restante).
   function bilanPosition(p) {
     let qAchat = 0, coutAchat = 0, qVente = 0, investi = 0, recupere = 0, realise = 0;
     let qteConnue = true;
-    const exs = (p.executions || []).slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+    const exs = actives(p).slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
     // achats d'abord pour le PRU (les fiches sans date d'achat sont antérieures aux ventes)
     for (const e of exs.filter((x) => x.type === 'achat')) {
       const m = montantExecution(e);
@@ -174,6 +182,14 @@
     const jour = new Date(marche.maintenant ? Date.parse(marche.maintenant) : Date.now()).toISOString().slice(0, 10);
     const strike = pc.strike != null ? pc.strike : strikeDuJour(p, jour);
     out.levier = r2(levier(marche.spot, strike, p.sens));
+    const dev = devisePosition(p), conv = dev === 'USD' && isNum(marche.eurusd) ? marche.eurusd : 1;
+    if (isNum(strike) && isNum(p.parite)) {
+      out.niveau_stop = r2(strike + sgn(p.sens) * stopPrix * p.parite * conv);
+      out.niveau_ko = r2(p.barriere == null || p.barriere === p.strike ? strike : p.barriere);
+    }
+    const t0 = out.date_entree ? Date.parse(out.date_entree) : null;
+    out.jours_en_position = t0 ? Math.max(0, Math.round((Date.parse(jour) - t0) / 86400000)) : null;
+    out.spot = isNum(marche.spot) ? marche.spot : null;
     // BEST : barrière = strike du jour ; sinon la barrière enregistrée
     const barriere = p.barriere == null || p.barriere === p.strike ? strike : p.barriere;
     out.distance_barriere_pct = r2(distanceBarriere(marche.spot, barriere, p.sens));
@@ -202,7 +218,7 @@
     const c = journal.cash || {};
     let total = isNum(c.depot_initial_eur) ? c.depot_initial_eur : 0;
     for (const p of journal.positions || []) {
-      for (const e of p.executions || []) {
+      for (const e of actives(p)) {
         const m = montantExecution(e);
         if (m == null) continue;
         total += e.type === 'achat' ? -m : m;
@@ -243,6 +259,91 @@
     };
   }
 
+  /* ---------------- calendrier, alertes, règles ---------------- */
+
+  // « 2026-10-28 » + « 19:00 » (heure de Paris) → millisecondes UTC.
+  function parisVersMs(dateISO, hhmm) {
+    const [y, m, d] = dateISO.split('-').map(Number), [hh, mm] = (hhmm || '00:00').split(':').map(Number);
+    let t = Date.UTC(y, m - 1, d, hh, mm);
+    for (let i = 0; i < 2; i++) {
+      const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(t));
+      const g = (k) => Number(parts.find((x) => x.type === k).value);
+      t += Date.UTC(y, m - 1, d, hh, mm) - Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'));
+    }
+    return t;
+  }
+  const jourParis = (ms) => new Date(ms).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
+  const heureParis = (ms) => new Date(ms).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
+
+  // Annonces à venir (dans `heures` heures), triées.
+  function annoncesProches(calendrier, maintenant, heures) {
+    const now = maintenant, lim = now + heures * 3600000;
+    return (calendrier || []).map((e) => ({ ...e, ms: parisVersMs(e.date, e.heure_paris) })).filter((e) => e.ms >= now - 15 * 60000 && e.ms <= lim).sort((a, b) => a.ms - b.ms);
+  }
+  const estFOMC = (e) => /FOMC/i.test(e.nom || '');
+  // Période FOMC : de la veille de la réunion (2 jours) jusqu'à la décision.
+  function enPeriodeFOMC(calendrier, maintenant) {
+    const j = Date.parse(jourParis(maintenant));
+    return (calendrier || []).some((e) => estFOMC(e) && j >= Date.parse(e.date) - 2 * 86400000 && j <= Date.parse(e.date));
+  }
+  function marcheOuvert(maintenant) {
+    const p = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', weekday: 'short', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(maintenant));
+    const wd = p.find((x) => x.type === 'weekday').value, h = Number(p.find((x) => x.type === 'hour').value) + Number(p.find((x) => x.type === 'minute').value) / 60;
+    return !['Sat', 'Sun'].includes(wd) && h >= 9 && h < 22;
+  }
+
+  // Alertes de la journée : { niveau: 'rouge'|'orange', texte }.
+  function alertes({ suivis, quotes, calendrier, maintenant }) {
+    const a = [];
+    for (const { p, s } of suivis.filter((x) => x.s.statut === 'ouverte')) {
+      if (s.stop_touche) a.push({ niveau: 'rouge', texte: `Stop touché : ${p.libelle}` });
+      else if (s.distance_barriere_pct != null && s.distance_barriere_pct < 1) a.push({ niveau: 'rouge', texte: `Barrière à ${nb2(s.distance_barriere_pct)} % : ${p.libelle}` });
+      else if (s.distance_barriere_pct != null && s.distance_barriere_pct < 2) a.push({ niveau: 'orange', texte: `Barrière à ${nb2(s.distance_barriere_pct)} % : ${p.libelle}` });
+      const k = cleSousJacent(p.sous_jacent), q = k && quotes && quotes.quotes && quotes.quotes[SOUS_JACENTS[k].quote];
+      if (q && q.quote_time && marcheOuvert(maintenant)) {
+        const age = Math.round((maintenant - Date.parse(q.quote_time)) / 60000);
+        if (age > 20) a.push({ niveau: 'orange', texte: `Cours ${k} vieux de ${age} min : le prix du turbo est une estimation douteuse` });
+      }
+    }
+    const ouvert = suivis.some((x) => x.s.statut === 'ouverte');
+    for (const e of annoncesProches(calendrier, maintenant, 2)) a.push({ niveau: ouvert ? 'rouge' : 'orange', texte: `${e.nom} à ${e.heure_paris}${ouvert ? ' : être à plat avant' : ''}` });
+    return a;
+  }
+  const nb2 = (x) => Math.round(x * 100) / 100;
+
+  // Règles du PLAN, avant un achat. Renvoie une liste d'avertissements (jamais bloquants).
+  function verifierRegles({ journal, sens, sousJacent, prix, levierTurbo, stopPct, mise, calendrier, maintenant }) {
+    const w = [], R = REGLES;
+    const k = cleSousJacent(sousJacent);
+    if (isNum(levierTurbo) && levierTurbo > 20 && enPeriodeFOMC(calendrier, maintenant)) w.push(`Levier ×${Math.round(levierTurbo * 10) / 10} : le maximum est ×20 en période FOMC.`);
+    if (isNum(stopPct) && stopPct < (isNum(R.stop_pct) ? R.stop_pct : -40)) w.push(`Stop à ${stopPct} % : la règle est ${R.stop_pct} %.`);
+    for (const p of journal.positions || []) {
+      const b = bilanPosition(p);
+      if (b.statut !== 'ouverte' || b.pru == null) continue;
+      if (cleSousJacent(p.sous_jacent) === k && String(p.sens).toUpperCase() === String(sens).toUpperCase() && isNum(prix) && prix < b.pru)
+        w.push(`Moyenne à la baisse : vous avez déjà ${p.libelle} à ${Math.round(b.pru * 1000) / 1000} €.`);
+    }
+    const ouvertes = (journal.positions || []).map(bilanPosition).filter((b) => b.statut === 'ouverte');
+    const engage = ouvertes.reduce((t, b) => t + (b.cout_restant || 0), 0);
+    if (isNum(R.poche_eur) && isNum(mise) && engage + mise > R.poche_eur) w.push(`Au-dessus de la poche : ${Math.round(engage + mise)} € engagés pour ${R.poche_eur} €.`);
+    for (const e of annoncesProches(calendrier, maintenant, 3)) w.push(`${e.nom} à ${e.heure_paris} : ${e.regle || 'à plat avant'}.`);
+    return w;
+  }
+
+  // Réalisé d'une journée (ventes datées ce jour-là), valeur totale (caisse + positions au prix estimé).
+  function realiseDuJour(journal, jour) {
+    let t = 0;
+    for (const p of journal.positions || []) {
+      const b = bilanPosition(p);
+      if (b.pru == null) continue;
+      for (const e of actives(p)) if (e.type === 'vente' && e.date === jour) { const m = montantExecution(e); if (m != null && isNum(e.quantite)) t += m - b.pru * e.quantite; }
+    }
+    return r2(t);
+  }
+  function valeurTotale(journal, suivis) {
+    return r2(cash(journal) + suivis.filter((x) => x.s.statut === 'ouverte').reduce((t, x) => t + (isNum(x.s.prix) ? x.s.prix * x.s.quantite_restante : x.s.cout_restant || 0), 0));
+  }
+
   /* ---------------- affichage ---------------- */
 
   // Montant en euros, arrondi au centime ; « ,00 » masqué (1 234,9995 → « 1 235 € »).
@@ -257,7 +358,8 @@
 
   const Calc = { REGLES, configurer, FINANCEMENT, SOUS_JACENTS, cleSousJacent, devisePosition, montantExecution, bilanPosition,
     strikeDuJour, valeurTheorique, levier, distanceBarriere, prixCourant, suiviPosition, dimensionner,
-    ratioGainRisque, cash, stats, formatEur };
+    ratioGainRisque, cash, stats, formatEur, actives, parisVersMs, jourParis, heureParis, annoncesProches, enPeriodeFOMC,
+    marcheOuvert, alertes, verifierRegles, realiseDuJour, valeurTotale };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Calc;
   else root.Calc = Calc;

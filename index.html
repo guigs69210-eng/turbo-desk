@@ -18,6 +18,7 @@
   <h1>Turbo Desk</h1>
   <div class="fresh" id="fresh" role="status" aria-live="polite"></div>
   <button class="icon-btn" id="refresh" aria-label="Actualiser">↻</button>
+  <button class="icon-btn" id="settings" aria-label="Réglages" hidden>⚙</button>
 </header>
 
 <main id="main">
@@ -25,6 +26,9 @@
   <section id="login" class="card" hidden>
     <h2>Connexion</h2>
     <p>Collez votre clé GitHub. Elle reste sur ce téléphone, nulle part ailleurs.</p>
+    <details><summary>Où trouver ma clé ?</summary>
+      <p class="muted">Sur github.com : Settings → Developer settings → Personal access tokens → Fine-grained tokens. Dépôt turbo-brief : Contents en lecture et écriture, Actions en écriture. Notez la date d'expiration.</p>
+      <p class="muted">Sur iPhone, l'app ajoutée à l'écran d'accueil ne voit pas la clé collée dans Safari : collez-la dans l'app installée.</p></details>
     <input id="token-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Clé GitHub" placeholder="github_pat_…">
     <button class="btn" id="token-save">Enregistrer</button>
     <p class="err" id="login-err" role="alert"></p>
@@ -42,7 +46,7 @@
   <button data-tab="today" aria-selected="true">Aujourd'hui</button>
   <button data-tab="pos">Positions</button>
   <button data-tab="journal">Journal</button>
-  <button data-tab="stats">Stats</button>
+  <button data-tab="stats">Bilan</button>
 </nav>
 
 <!-- Feuille générique : saisie puis confirmation (remplie par app.js) -->
