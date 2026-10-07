@@ -45,39 +45,12 @@
   <button data-tab="stats">Stats</button>
 </nav>
 
-<!-- Feuille « + Trade » : calculette, rien n'est enregistré -->
+<!-- Feuille générique : saisie puis confirmation (remplie par app.js) -->
 <div class="sheet-bg" id="sheet" hidden>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-t">
-    <h2 id="sheet-t">Nouveau trade</h2>
-    <p class="muted">Calculette seulement. Rien n'est enregistré dans le journal.</p>
-    <label>Sens
-      <select id="n-sens"><option>CALL</option><option>PUT</option></select>
-    </label>
-    <label>Prix du turbo (€)
-      <input id="n-prix" inputmode="decimal" placeholder="3,98">
-    </label>
-    <label>Mise (€)
-      <input id="n-mise" inputmode="decimal" placeholder="">
-    </label>
-    <label>Stop (%)
-      <input id="n-stop" inputmode="decimal" value="-40">
-    </label>
-    <label>Entrée sous-jacent
-      <input id="n-entree" inputmode="decimal">
-    </label>
-    <label>Stop sous-jacent
-      <input id="n-ssl" inputmode="decimal">
-    </label>
-    <label>Cible sous-jacent
-      <input id="n-cible" inputmode="decimal">
-    </label>
-    <dl class="calc" id="n-out"></dl>
-    <div class="row">
-      <button class="btn ghost" id="sheet-close">Fermer</button>
-      <button class="btn" disabled>Enregistrer (bientôt)</button>
-    </div>
-  </div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-t" id="sheet-body"></div>
 </div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="calc.js"></script>
 <script src="app.js"></script>

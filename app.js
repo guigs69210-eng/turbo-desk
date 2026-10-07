@@ -13,7 +13,7 @@
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignoré */ } },
   };
   let token = store.get('td_token');
-  let journal = null, quotes = null, daily = null;
+  let journal = null, journalSha = null, quotes = null, daily = null;
   let tabCourant = 'today';
   let attente = false;
 
@@ -23,15 +23,46 @@
   const jj = (d) => (d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '?');
   const cls = (x) => (x == null ? '' : x >= 0 ? 'up' : 'down');
 
-  /* ---------- GitHub (lecture) : UTF-8 par TextDecoder ---------- */
-  async function lire(fichier) {
-    const r = await fetch(`https://api.github.com/repos/${BRIEF}/contents/${fichier}?ref=data&t=${Date.now()}`, {
-      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github.raw+json' },
-      cache: 'no-store',
-    });
+  /* ---------- GitHub : UTF-8 par TextDecoder/TextEncoder, base64 sans atob/btoa ---------- */
+  const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  function b64Encode(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 3) {
+      const n = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+      s += B64[(n >> 18) & 63] + B64[(n >> 12) & 63] + (i + 1 < bytes.length ? B64[(n >> 6) & 63] : '=') + (i + 2 < bytes.length ? B64[n & 63] : '=');
+    }
+    return s;
+  }
+  function b64Decode(str) {
+    const c = str.replace(/[^A-Za-z0-9+/]/g, ''), out = new Uint8Array(Math.floor((c.length * 3) / 4));
+    let o = 0;
+    for (let i = 0; i < c.length; i += 4) {
+      const n = (B64.indexOf(c[i]) << 18) | (B64.indexOf(c[i + 1]) << 12) | ((B64.indexOf(c[i + 2]) & 63) << 6) | (B64.indexOf(c[i + 3]) & 63);
+      out[o++] = (n >> 16) & 255; if (i + 2 < c.length) out[o++] = (n >> 8) & 255; if (i + 3 < c.length) out[o++] = n & 255;
+    }
+    return out.subarray(0, o);
+  }
+  const utf8 = (bytes) => new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  const enTete = (extra) => Object.assign({ Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' }, extra || {});
+  async function lireMeta(fichier) {
+    const r = await fetch(`https://api.github.com/repos/${BRIEF}/contents/${fichier}?ref=data&t=${Date.now()}`, { headers: enTete(), cache: 'no-store' });
     if (r.status === 401 || r.status === 403 || r.status === 404) { const e = new Error('acces'); e.status = r.status; throw e; }
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await r.arrayBuffer()));
+    const m = await r.json();
+    return { data: JSON.parse(utf8(b64Decode(m.content))), sha: m.sha };
+  }
+  const lire = async (f) => (await lireMeta(f)).data;
+  // Écrit journal.json sur data. Conflit (modifié ailleurs) → erreur 'conflit', rien n'est écrasé.
+  async function ecrireJournal(nouveau, message) {
+    const texte = JSON.stringify(nouveau, null, 2) + '\n';
+    const r = await fetch(`https://api.github.com/repos/${BRIEF}/contents/journal.json`, {
+      method: 'PUT', headers: enTete({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ message, content: b64Encode(new TextEncoder().encode(texte)), sha: journalSha, branch: 'data' }),
+    });
+    if (r.status === 409 || r.status === 422) { const e = new Error('conflit'); e.conflit = true; throw e; }
+    if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
+    const out = await r.json();
+    journal = nouveau; journalSha = out.content.sha;
   }
   async function lancerCours() {
     const r = await fetch(`https://api.github.com/repos/${BRIEF}/actions/workflows/quotes.yml/dispatches`, {
@@ -56,7 +87,9 @@
   async function charger() {
     const btn = $('refresh'); btn.classList.add('spin');
     try {
-      [journal, quotes, daily] = await Promise.all([lire('journal.json'), lire('quotes/latest.json'), lire('daily/latest.json').catch(() => null)]);
+      let jm;
+      [jm, quotes, daily] = await Promise.all([lireMeta('journal.json'), lire('quotes/latest.json'), lire('daily/latest.json').catch(() => null)]);
+      journal = jm.data; journalSha = jm.sha;
       C.configurer(journal.regles || {});
       majFraicheur(); rendre();
     } catch (e) {
@@ -129,7 +162,10 @@
         <div class="grid4"><div class="lbl">Prix<b class="num">${nb(s.prix, 3)}</b></div><div class="lbl">PRU<b class="num">${nb(s.pru, 3)}</b></div>
           <div class="lbl">Stop<b class="num">${nb(s.stop_prix, 3)}</b></div><div class="lbl">Levier<b class="num">${s.levier == null ? '—' : '×' + nb(s.levier, 1)}</b></div></div>
         <div class="lbl">Marge avant barrière : <span class="num">${pct(d)}</span> · risque au stop <span class="num">${C.formatEur(s.risque_stop_eur)}</span></div>
-        <div class="bar" role="img" aria-label="Marge avant barrière"><i style="width:${larg}%;background:${col}"></i></div></div>`;
+        <div class="bar" role="img" aria-label="Marge avant barrière"><i style="width:${larg}%;background:${col}"></i></div>
+        <div class="actions"><button class="btn ghost" data-act="prix" data-id="${esc(p.id)}">Prix courtier</button>
+          <button class="btn ghost" data-act="strike" data-id="${esc(p.id)}">Vrai strike</button>
+          <button class="btn" data-act="vente" data-id="${esc(p.id)}">Vendre</button></div></div>`;
     }).join('');
   }
 
@@ -190,19 +226,190 @@
   $('refresh').onclick = () => { store.del('td_dispatch'); actualiser(); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden && token) actualiser(); });
 
-  /* ---------- « + Trade » : calculette ---------- */
-  function calculette() {
-    const prix = num($('n-prix').value), mise = num($('n-mise').value) ?? C.REGLES.mise_defaut_eur, stop = num($('n-stop').value);
-    const d = C.dimensionner({ prixTurbo: prix, mise: mise == null ? NaN : mise, stopPct: stop == null ? C.REGLES.stop_pct : stop });
-    const rr = C.ratioGainRisque(num($('n-entree').value), num($('n-ssl').value), num($('n-cible').value));
-    const ligne = (k, v) => `<dt>${k}</dt><dd class="num">${v}</dd>`;
-    $('n-out').innerHTML = d ? ligne('Quantité', nb(d.quantite)) + ligne('Engagé', C.formatEur(d.engage)) + ligne('Perte au stop', C.formatEur(-d.perte_stop))
-      + (d.perte_stop_pct_poche != null ? ligne('Part de la poche', pct(d.perte_stop_pct_poche)) : '') + (rr != null ? ligne('Gain / risque', nb(rr, 2)) : '') : `<dt>${prix == null ? 'Entrez le prix du turbo.' : 'Entrez la mise.'}</dt><dd></dd>`;
+  /* ---------- feuilles : saisie → confirmation (totaux) → écriture ---------- */
+  const auj = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
+  const maintenantHM = () => new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
+  const champ = (id, lib, val, mode) => `<label>${lib}<input id="${id}" ${mode === 'date' ? 'type="date"' : mode === 'time' ? 'type="time"' : 'inputmode="' + (mode || 'decimal') + '"'} value="${esc(val == null ? '' : val)}"></label>`;
+  const ligne = (k, v, c) => `<dt>${k}</dt><dd class="num ${c || ''}">${v}</dd>`;
+  const val = (id) => { const e = $(id); return e ? e.value.trim() : ''; };
+  function toast(msg, kind) { const t = $('toast'); t.textContent = msg; t.className = 'toast show ' + (kind || ''); clearTimeout(t._h); t._h = setTimeout(() => { t.className = 'toast'; }, 3500); }
+  // Nouveau nœud à chaque feuille : les écouteurs de la feuille précédente disparaissent avec l'ancien.
+  function ouvrir(html) {
+    const ancien = $('sheet-body'), neuf = ancien.cloneNode(false);
+    ancien.replaceWith(neuf); neuf.innerHTML = html; $('sheet').hidden = false;
   }
-  $('fab').onclick = () => { $('n-mise').placeholder = C.REGLES.mise_defaut_eur ? String(C.REGLES.mise_defaut_eur) : ''; $('sheet').hidden = false; calculette(); };
-  $('sheet-close').onclick = () => { $('sheet').hidden = true; };
-  $('sheet').addEventListener('input', calculette);
-  $('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) $('sheet').hidden = true; });
+  function fermer() { $('sheet').hidden = true; $('sheet-body').innerHTML = ''; }
+  $('sheet').addEventListener('click', (e) => { if (e.target === $('sheet') || e.target.dataset.fermer != null) fermer(); });
+
+  // Étape 2 commune : récapitulatif chiffré, puis écriture seulement après « Valider ».
+  function confirmer(titre, recap, appliquer, message) {
+    ouvrir(`<h2 id="sheet-t">${titre}</h2><p>Vérifiez avant d'écrire dans le journal.</p>
+      <div class="recap"><dl class="calc">${recap}</dl></div><p class="err" id="w-err" role="alert"></p>
+      <div class="row"><button class="btn ghost" data-fermer>Annuler</button><button class="btn" id="w-ok">Valider</button></div>`);
+    $('w-ok').onclick = async () => {
+      $('w-ok').disabled = true; $('w-ok').textContent = 'Écriture…';
+      const copie = JSON.parse(JSON.stringify(journal));
+      try {
+        appliquer(copie);
+        await ecrireJournal(copie, message);
+        fermer(); rendre(); toast('Enregistré dans le journal.', 'ok');
+      } catch (e) {
+        if (e.conflit) { fermer(); await charger(); toast('Le journal a changé ailleurs. Rien n\'est écrit. Recommencez.', 'ko'); return; }
+        $('w-err').textContent = e.status === 403 || e.status === 404 ? 'Écriture refusée : la clé doit avoir Contenu en écriture sur turbo-brief.' : 'Écriture impossible (' + e.message + '). Rien n\'est écrit.';
+        $('w-ok').disabled = false; $('w-ok').textContent = 'Valider';
+      }
+    };
+  }
+  const trouver = (j, id) => j.positions.find((p) => p.id === id);
+  function nouvelId(j) {
+    const n = Math.max(0, ...j.positions.map((p) => parseInt(String(p.id).replace(/\D/g, ''), 10) || 0)) + 1;
+    return 'p' + String(n).padStart(2, '0');
+  }
+
+  /* 1) + Trade : achat d'une nouvelle position */
+  function feuilleTrade() {
+    const R = C.REGLES;
+    ouvrir(`<h2 id="sheet-t">Nouveau trade</h2>
+      <div class="grid2"><label>Sous-jacent<select id="t-sj"><option value="NQ">Nasdaq 100</option><option value="CAC40">CAC 40</option><option value="SP500">S&amp;P 500</option></select></label>
+        <label>Sens<select id="t-sens"><option>CALL</option><option>PUT</option></select></label></div>
+      <div class="grid2">${champ('t-strike', 'Strike', '')}${champ('t-barr', 'Barrière (vide = strike)', '')}</div>
+      <div class="grid2">${champ('t-parite', 'Parité', 100)}${champ('t-em', 'Émetteur', 'SG', 'text')}</div>
+      ${champ('t-isin', 'ISIN (facultatif)', '', 'text')}
+      <div class="grid2">${champ('t-prix', 'Prix du turbo (€)', '')}${champ('t-mise', 'Mise (€)', R.mise_defaut_eur)}</div>
+      <div class="grid2">${champ('t-q', 'Quantité', '', 'numeric')}${champ('t-frais', 'Frais (€)', 0)}</div>
+      <div class="grid2">${champ('t-date', 'Date', auj(), 'date')}${champ('t-heure', 'Heure', maintenantHM(), 'time')}</div>
+      <div class="grid2">${champ('t-stop', 'Stop (%)', R.stop_pct)}${champ('t-conv', 'Conviction /10', '', 'numeric')}</div>
+      <div class="grid2">${champ('t-ssl', 'Stop sous-jacent', '')}${champ('t-cible', 'Cible sous-jacent', '')}</div>
+      ${champ('t-note', 'Note (facultatif)', '', 'text')}
+      <dl class="calc" id="t-out"></dl><p class="err" id="t-err" role="alert"></p>
+      <div class="row"><button class="btn ghost" data-fermer>Fermer</button><button class="btn" id="t-go">Vérifier</button></div>`);
+    let qAuto = true;
+    $('t-q').addEventListener('input', () => { qAuto = false; });
+    const maj = () => {
+      const prix = num(val('t-prix')), mise = num(val('t-mise')), stop = num(val('t-stop'));
+      const d = C.dimensionner({ prixTurbo: prix, mise: mise == null ? NaN : mise, stopPct: stop == null ? R.stop_pct : stop });
+      if (d && qAuto) $('t-q').value = d.quantite;
+      const q = num(val('t-q')), sj = val('t-sj'), qt = px(C.SOUS_JACENTS[sj].quote), spotNow = qt && qt.price;
+      const rr = C.ratioGainRisque(spotNow, num(val('t-ssl')), num(val('t-cible')));
+      const strike = num(val('t-strike'));
+      const theo = C.valeurTheorique({ spot: spotNow, strike, sens: val('t-sens'), parite: num(val('t-parite')), devise: C.SOUS_JACENTS[sj].devise, eurusd: eurusd() });
+      let h = '';
+      if (prix != null && q) {
+        const eng = q * prix + (num(val('t-frais')) || 0), perte = q * prix * (-(stop == null ? R.stop_pct : stop) / 100);
+        h += ligne('Engagé', C.formatEur(eng)) + ligne('Perte au stop', C.formatEur(-perte), 'down')
+          + (R.poche_eur ? ligne('Part de la poche', pct((perte / R.poche_eur) * 100)) : '');
+      }
+      if (theo != null) h += ligne('Prix théorique', nb(theo, 3) + ' €');
+      if (strike != null && spotNow) h += ligne('Levier', '×' + nb(C.levier(spotNow, strike, val('t-sens')), 1)) + ligne('Marge avant barrière', pct(C.distanceBarriere(spotNow, num(val('t-barr')) ?? strike, val('t-sens'))));
+      if (rr != null) h += ligne('Gain / risque', nb(rr, 2));
+      $('t-out').innerHTML = h;
+    };
+    $('sheet-body').addEventListener('input', maj); $('sheet-body').addEventListener('change', maj); maj();
+    $('t-go').onclick = () => {
+      const sj = val('t-sj'), sens = val('t-sens'), strike = num(val('t-strike')), parite = num(val('t-parite'));
+      const prix = num(val('t-prix')), q = num(val('t-q')), frais = num(val('t-frais')) ?? 0, stop = num(val('t-stop'));
+      const err = !(strike > 0) ? 'Entrez le strike.' : !(parite > 0) ? 'Entrez la parité.' : !(prix > 0) ? 'Entrez le prix du turbo.'
+        : !(q > 0 && Number.isInteger(q)) ? 'Entrez une quantité entière.' : frais < 0 ? 'Frais négatifs ?' : !(stop < 0 && stop > -100) ? 'Stop entre −1 et −99 %.'
+        : !/^\d{4}-\d{2}-\d{2}$/.test(val('t-date')) ? 'Entrez la date.' : '';
+      if (err) { $('t-err').textContent = err; return; }
+      const barriere = num(val('t-barr')) ?? strike, conv = num(val('t-conv'));
+      const em = val('t-em') || null, sjNom = { NQ: 'NQ', CAC40: 'CAC40', SP500: 'SP500' }[sj];
+      const pos = {
+        id: nouvelId(journal), libelle: `${sens} ${sjNom} ${strike} Turbo${barriere === strike ? ' BEST' : ''}${em ? ' (' + em + ')' : ''}`,
+        sous_jacent: sjNom, sens, emetteur: em, isin: val('t-isin') || null, reference_courtier: null,
+        strike, barriere, parite, devise: C.SOUS_JACENTS[sj].devise,
+        executions: [{ date: val('t-date'), heure: val('t-heure') || null, type: 'achat', quantite: q, prix, frais }],
+        plan: { stop_pct: stop, stop_prix: null, cibles: num(val('t-cible')) != null ? [num(val('t-cible'))] : [], invalidation: num(val('t-ssl')) },
+        conviction: conv, setup: null, reco_liee: null, regle_respectee: null, note: val('t-note') || null,
+      };
+      const montant = C.montantExecution(pos.executions[0]), avant = C.cash(journal);
+      confirmer('Confirmer l\'achat',
+        ligne('Position', esc(pos.libelle)) + ligne('Achat', `${nb(q)} × ${nb(prix, 3)} €`) + ligne('Frais', C.formatEur(frais))
+        + ligne('Engagé', C.formatEur(montant)) + ligne('Caisse', `${C.formatEur(avant)} → ${C.formatEur(avant - montant)}`, avant - montant < 0 ? 'down' : '')
+        + ligne('Stop turbo', nb(prix * (1 + stop / 100), 3) + ' €') + ligne('Perte au stop', C.formatEur(-(q * prix * -stop / 100)), 'down'),
+        (j) => { pos.id = nouvelId(j); j.positions.push(pos); },
+        `journal: achat ${pos.libelle} (${q} × ${prix})`);
+    };
+  }
+
+  /* 2) Vendre tout ou partie */
+  function feuilleVente(id) {
+    const p = trouver(journal, id), b = C.bilanPosition(p);
+    ouvrir(`<h2 id="sheet-t">Vendre</h2><p>${esc(p.libelle)} · reste ${nb(b.quantite_restante)} · PRU ${nb(b.pru, 3)} €</p>
+      <div class="grid2">${champ('v-q', 'Quantité', b.quantite_restante, 'numeric')}${champ('v-prix', 'Prix de vente (€)', '')}</div>
+      <div class="grid2">${champ('v-frais', 'Frais (€)', 0)}${champ('v-date', 'Date', auj(), 'date')}</div>
+      ${champ('v-heure', 'Heure', maintenantHM(), 'time')}${champ('v-note', 'Note (facultatif)', '', 'text')}
+      <p class="err" id="v-err" role="alert"></p>
+      <div class="row"><button class="btn ghost" data-fermer>Fermer</button><button class="btn" id="v-go">Vérifier</button></div>`);
+    $('v-go').onclick = () => {
+      const q = num(val('v-q')), prix = num(val('v-prix')), frais = num(val('v-frais')) ?? 0;
+      const err = !(q > 0 && Number.isInteger(q) && q <= b.quantite_restante) ? `Quantité entière entre 1 et ${b.quantite_restante}.` : !(prix >= 0) ? 'Entrez le prix de vente.'
+        : frais < 0 ? 'Frais négatifs ?' : !/^\d{4}-\d{2}-\d{2}$/.test(val('v-date')) ? 'Entrez la date.' : '';
+      if (err) { $('v-err').textContent = err; return; }
+      const ex = { date: val('v-date'), heure: val('v-heure') || null, type: 'vente', quantite: q, prix, frais };
+      if (val('v-note')) ex.note = val('v-note');
+      const apres = C.bilanPosition({ ...p, executions: [...p.executions, ex] });
+      const m = C.montantExecution(ex), pnl = m - b.pru * q, avant = C.cash(journal);
+      confirmer('Confirmer la vente',
+        ligne('Vente', `${nb(q)} × ${nb(prix, 3)} €`) + ligne('Frais', C.formatEur(frais)) + ligne('Reçu', C.formatEur(m))
+        + ligne('Gain / perte de cette vente', C.formatEur(pnl, { signe: true }), cls(pnl))
+        + ligne('Caisse', `${C.formatEur(avant)} → ${C.formatEur(avant + m)}`)
+        + ligne('Position après', apres.statut === 'fermee' ? 'fermée, ' + C.formatEur(apres.pnl_realise, { signe: true }) : 'ouverte, reste ' + nb(apres.quantite_restante)),
+        (j) => { trouver(j, id).executions.push(ex); },
+        `journal: vente ${p.libelle} (${q} × ${prix})`);
+    };
+  }
+
+  /* 3) Prix courtier, avec l'heure (fait foi 30 min) */
+  function feuillePrix(id) {
+    const p = trouver(journal, id), b = C.bilanPosition(p);
+    ouvrir(`<h2 id="sheet-t">Prix courtier</h2><p>${esc(p.libelle)}</p>
+      <div class="grid2">${champ('b-prix', 'Prix vu chez le courtier (€)', '')}${champ('b-heure', 'Heure', maintenantHM(), 'time')}</div>
+      <p class="err" id="b-err" role="alert"></p>
+      <div class="row"><button class="btn ghost" data-fermer>Fermer</button><button class="btn" id="b-go">Vérifier</button></div>`);
+    $('b-go').onclick = () => {
+      const prix = num(val('b-prix')), hm = val('b-heure');
+      if (!(prix >= 0) || !/^\d{2}:\d{2}$/.test(hm)) { $('b-err').textContent = 'Entrez le prix et l\'heure.'; return; }
+      // heure de Paris → instant UTC (décalage du moment)
+      const d = new Date(), local = new Date(d.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+      const [hh, mm] = hm.split(':').map(Number); local.setHours(hh, mm, 0, 0);
+      const decalage = new Date(d.toLocaleString('en-US', { timeZone: 'Europe/Paris' })) - d;
+      const heure = new Date(Math.round((local.getTime() - decalage) / 60000) * 60000).toISOString();
+      const latent = (prix - b.pru) * b.quantite_restante;
+      const stopPrix = b.pru * (1 + ((p.plan && p.plan.stop_pct) ?? C.REGLES.stop_pct) / 100);
+      confirmer('Confirmer le prix',
+        ligne('Prix', nb(prix, 3) + ' € à ' + esc(hm)) + ligne('PRU', nb(b.pru, 3) + ' €') + ligne('Latent avec ce prix', C.formatEur(latent, { signe: true }), cls(latent))
+        + ligne('Stop touché ?', prix <= stopPrix ? 'OUI' : 'non', prix <= stopPrix ? 'down' : ''),
+        (j) => { trouver(j, id).prix_broker = { prix, heure }; },
+        `journal: prix courtier ${p.libelle} ${prix}`);
+    };
+  }
+
+  /* 4) Vrai strike d'un BEST (nouveau point de départ de l'estimation) */
+  function feuilleStrike(id) {
+    const p = trouver(journal, id), estime = C.strikeDuJour(p, auj());
+    ouvrir(`<h2 id="sheet-t">Vrai strike</h2><p>${esc(p.libelle)} · estimé aujourd'hui ${nb(estime, 2)}</p>
+      <div class="grid2">${champ('k-strike', 'Strike vu chez l\'émetteur', '')}${champ('k-date', 'Date', auj(), 'date')}</div>
+      <p class="err" id="k-err" role="alert"></p>
+      <div class="row"><button class="btn ghost" data-fermer>Fermer</button><button class="btn" id="k-go">Vérifier</button></div>`);
+    $('k-go').onclick = () => {
+      const k = num(val('k-strike')), d = val('k-date');
+      if (!(k > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(d)) { $('k-err').textContent = 'Entrez le strike et la date.'; return; }
+      const sp = spot(p), theo = C.valeurTheorique({ spot: sp, strike: k, sens: p.sens, parite: p.parite, devise: C.devisePosition(p), eurusd: eurusd() });
+      const ecart = estime ? ((k - estime) / estime) * 100 : null;
+      confirmer('Confirmer le strike',
+        ligne('Strike estimé → saisi', `${nb(estime, 2)} → ${nb(k, 2)}`) + (ecart != null ? ligne('Écart', pct(ecart, true), Math.abs(ecart) > 1 ? 'warn' : '') : '')
+        + ligne('Prix théorique', theo == null ? '—' : nb(theo, 3) + ' €') + ligne('Marge avant barrière', pct(C.distanceBarriere(sp, k, p.sens))),
+        (j) => { const x = trouver(j, id); x.strike_ref = k; x.date_ref = d; },
+        `journal: strike ${p.libelle} ${k} au ${d}`);
+    };
+  }
+
+  $('fab').onclick = () => { if (journal) feuilleTrade(); };
+  $('tab-pos').addEventListener('click', (e) => {
+    const bt = e.target.closest('button[data-act]'); if (!bt) return;
+    ({ vente: feuilleVente, prix: feuillePrix, strike: feuilleStrike })[bt.dataset.act](bt.dataset.id);
+  });
 
   /* ---------- démarrage ---------- */
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

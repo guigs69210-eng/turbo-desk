@@ -76,3 +76,11 @@ label{display:block;font-size:13px;color:var(--muted)}
 .list-row .t,.list-row .s{display:block}
 .list-row b,.list-row .num{white-space:nowrap}
 .list-row .t .tag{vertical-align:middle}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
+.actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.actions .btn{flex:1;min-height:44px;font-size:14px;padding:0 10px}
+.recap{background:var(--surface2);border-radius:12px;padding:12px;margin:8px 0 12px}
+.recap .calc{margin:0}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(var(--nav-h) + 80px + env(safe-area-inset-bottom));z-index:50;max-width:608px;margin:0 auto;
+  background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:15px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}.toast.ok{border-color:var(--green)}.toast.ko{border-color:var(--red)}
