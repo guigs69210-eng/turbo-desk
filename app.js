@@ -142,10 +142,12 @@
   const jourLong = (d) => (d ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : '?');
   const SJ_NOM = { NQ: 'Nasdaq 100', CAC40: 'CAC 40', SP500: 'S&P 500' };
 
-  // Expiration de la clé : la date saisie dans Réglages fait foi ; sinon l'en-tête GitHub, quand le navigateur le laisse lire.
+  // Expiration de la clé : date saisie dans Réglages, sinon celle du journal, sinon l'en-tête GitHub, quand le navigateur le laisse lire.
   function dateExp() {
     const u = /^\d{4}-\d{2}-\d{2}$/.test(store.get('td_exp_user')) ? Date.parse(store.get('td_exp_user') + 'T23:59:00') : NaN;
     if (isFinite(u)) return u;
+    const j = journal && journal.regles && journal.regles.cle_expire_le;   // date gardée dans le journal privé
+    if (/^\d{4}-\d{2}-\d{2}$/.test(j || '')) return Date.parse(j + 'T23:59:00');
     const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ?([+-]\d{2})(\d{2})$/.exec(store.get('td_exp') || '');
     return m ? Date.parse(`${m[1]}T${m[2]}${m[3]}:${m[4]}`) : NaN;
   }
