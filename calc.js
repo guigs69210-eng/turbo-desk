@@ -153,7 +153,7 @@
       const age = (now - Date.parse(prixBroker.heure)) / 60000;
       if (age >= 0 && age < REGLES.broker_max_min) return { prix: prixBroker.prix, source: 'BROKER', age_min: Math.round(age) };
     }
-    const dateISO = new Date(now).toISOString().slice(0, 10);
+    const dateISO = jourParis(now);
     const strike = strikeDuJour(p, dateISO);
     const prix = valeurTheorique({ spot, strike, sens: p.sens, parite: p.parite, devise: devisePosition(p), eurusd });
     return { prix, source: prix == null ? null : 'THEO', strike };
@@ -179,7 +179,7 @@
       out.pnl_latent_pct = r2(((pc.prix - b.pru) / b.pru) * 100);
       out.stop_touche = pc.prix <= stopPrix;
     }
-    const jour = new Date(marche.maintenant ? Date.parse(marche.maintenant) : Date.now()).toISOString().slice(0, 10);
+    const jour = jourParis(marche.maintenant ? Date.parse(marche.maintenant) : Date.now());
     const strike = pc.strike != null ? pc.strike : strikeDuJour(p, jour);
     out.levier = r2(levier(marche.spot, strike, p.sens));
     const dev = devisePosition(p), conv = dev === 'USD' && isNum(marche.eurusd) ? marche.eurusd : 1;
@@ -272,7 +272,7 @@
     }
     return t;
   }
-  const jourParis = (ms) => new Date(ms).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
+  function jourParis(ms) { return new Date(ms).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' }); }
   const heureParis = (ms) => new Date(ms).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
 
   // Annonces à venir (dans `heures` heures), triées.
@@ -285,6 +285,14 @@
   function enPeriodeFOMC(calendrier, maintenant) {
     const j = Date.parse(jourParis(maintenant));
     return (calendrier || []).some((e) => estFOMC(e) && j >= Date.parse(e.date) - 2 * 86400000 && j <= Date.parse(e.date));
+  }
+  // Séance de chaque cours, en heure de Paris (lundi-vendredi). Hors séance, un vieux cours est normal.
+  const SEANCES = { '^FCHI': [9, 17.6], '^GSPC': [15.5, 22], '^VIX': [15.5, 22], 'NQ=F': [0, 23], 'EURUSD=X': [0, 23] };
+  function seanceOuverte(ticker, maintenant) {
+    const p = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', weekday: 'short', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(maintenant));
+    const wd = p.find((x) => x.type === 'weekday').value, h = Number(p.find((x) => x.type === 'hour').value) + Number(p.find((x) => x.type === 'minute').value) / 60;
+    const [a, b] = SEANCES[ticker] || (/\.PA$/.test(ticker) ? [9, 17.6] : [9, 22]);
+    return !['Sat', 'Sun'].includes(wd) && h >= a && h < b;
   }
   function marcheOuvert(maintenant) {
     const p = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', weekday: 'short', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(maintenant));
@@ -300,7 +308,7 @@
       else if (s.distance_barriere_pct != null && s.distance_barriere_pct < 1) a.push({ niveau: 'rouge', texte: `Barrière à ${nb2(s.distance_barriere_pct)} % : ${p.libelle}` });
       else if (s.distance_barriere_pct != null && s.distance_barriere_pct < 2) a.push({ niveau: 'orange', texte: `Barrière à ${nb2(s.distance_barriere_pct)} % : ${p.libelle}` });
       const k = cleSousJacent(p.sous_jacent), q = k && quotes && quotes.quotes && quotes.quotes[SOUS_JACENTS[k].quote];
-      if (q && q.quote_time && marcheOuvert(maintenant)) {
+      if (q && q.quote_time && seanceOuverte(SOUS_JACENTS[k].quote, maintenant)) {
         const age = Math.round((maintenant - Date.parse(q.quote_time)) / 60000);
         if (age > 20) a.push({ niveau: 'orange', texte: `Cours ${k} vieux de ${age} min : le prix du turbo est une estimation douteuse` });
       }
@@ -312,7 +320,8 @@
   const nb2 = (x) => Math.round(x * 100) / 100;
 
   // Règles du PLAN, avant un achat. Renvoie une liste d'avertissements (jamais bloquants).
-  function verifierRegles({ journal, sens, sousJacent, prix, levierTurbo, stopPct, mise, calendrier, maintenant }) {
+  // `prixActuels` : { id de position: prix actuel du turbo } pour repérer une position déjà en perte.
+  function verifierRegles({ journal, sens, sousJacent, strike, prix, levierTurbo, stopPct, mise, calendrier, maintenant, prixActuels }) {
     const w = [], R = REGLES;
     const k = cleSousJacent(sousJacent);
     if (isNum(levierTurbo) && levierTurbo > 20 && enPeriodeFOMC(calendrier, maintenant)) w.push(`Levier ×${Math.round(levierTurbo * 10) / 10} : le maximum est ×20 en période FOMC.`);
@@ -320,8 +329,11 @@
     for (const p of journal.positions || []) {
       const b = bilanPosition(p);
       if (b.statut !== 'ouverte' || b.pru == null) continue;
-      if (cleSousJacent(p.sous_jacent) === k && String(p.sens).toUpperCase() === String(sens).toUpperCase() && isNum(prix) && prix < b.pru)
-        w.push(`Moyenne à la baisse : vous avez déjà ${p.libelle} à ${Math.round(b.pru * 1000) / 1000} €.`);
+      if (cleSousJacent(p.sous_jacent) !== k || String(p.sens).toUpperCase() !== String(sens).toUpperCase()) continue;
+      const actuel = prixActuels && isNum(prixActuels[p.id]) ? prixActuels[p.id] : null;
+      const memeTurbo = isNum(strike) && p.strike === strike && isNum(prix) && prix < b.pru;   // sans prix actuel : même turbo racheté moins cher
+      if (isNum(actuel) ? actuel < b.pru : memeTurbo)
+        w.push(`Moyenne à la baisse : ${p.libelle} est déjà ouvert et en perte (prix moyen ${Math.round(b.pru * 1000) / 1000} €).`);
     }
     const ouvertes = (journal.positions || []).map(bilanPosition).filter((b) => b.statut === 'ouverte');
     const engage = ouvertes.reduce((t, b) => t + (b.cout_restant || 0), 0);
@@ -359,7 +371,7 @@
   const Calc = { REGLES, configurer, FINANCEMENT, SOUS_JACENTS, cleSousJacent, devisePosition, montantExecution, bilanPosition,
     strikeDuJour, valeurTheorique, levier, distanceBarriere, prixCourant, suiviPosition, dimensionner,
     ratioGainRisque, cash, stats, formatEur, actives, parisVersMs, jourParis, heureParis, annoncesProches, enPeriodeFOMC,
-    marcheOuvert, alertes, verifierRegles, realiseDuJour, valeurTotale };
+    marcheOuvert, seanceOuverte, alertes, verifierRegles, realiseDuJour, valeurTotale };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Calc;
   else root.Calc = Calc;

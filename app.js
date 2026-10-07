@@ -82,8 +82,9 @@
     const el = $('fresh');
     if (msg) { el.textContent = msg; el.className = 'fresh old'; return; }
     if (!quotes) { el.textContent = ''; return; }
-    if (!C.marcheOuvert(Date.now())) { el.textContent = 'Marché fermé · dernier cours ' + C.heureParis(Date.parse(quotes.generated_at)); el.className = 'fresh'; return; }
-    const ages = ['NQ=F', '^FCHI', '^GSPC'].map(ageCours).filter((x) => x != null), pire = ages.length ? Math.max(...ages) : null;
+    const enSeance = ['NQ=F', '^FCHI', '^GSPC'].filter((t) => C.seanceOuverte(t, Date.now()));
+    if (!enSeance.length) { el.textContent = 'Marchés fermés · relevé de ' + C.heureParis(Date.parse(quotes.generated_at)); el.className = 'fresh'; return; }
+    const ages = enSeance.map(ageCours).filter((x) => x != null), pire = ages.length ? Math.max(...ages) : null;
     el.textContent = pire == null ? '' : 'Cours en retard de ' + (pire < 90 ? pire + ' min' : Math.round(pire / 60) + ' h');
     el.className = 'fresh' + (pire > 20 ? ' old' : '');
   }
@@ -98,14 +99,17 @@
       C.configurer(journal.regles || {});
       majFraicheur(); rendre();
     } catch (e) {
-      if (e.status) { deconnecter('Clé refusée ou sans accès à turbo-brief. Collez-en une autre.'); }
+      if (e.status === 401) deconnecter('Clé refusée (expirée ou fausse). Collez-en une autre.');
+      else if (e.status === 403) majFraicheur('GitHub refuse l\'accès (droits de la clé ou trop de demandes) : réessayez');
+      else if (e.status === 404) majFraicheur('Fichier introuvable sur turbo-brief (branche data)');
       else majFraicheur('Pas de réseau');
     } finally { btn.classList.remove('spin'); }
   }
-  async function actualiser() {
+  // `force` : bouton ↻. Sinon pas de relance hors séance (économise les minutes GitHub Actions).
+  async function actualiser(force) {
     await charger();
-    const a = ageMin();
-    if (a != null && a > FRAICHEUR_MAX_MIN && !attente) await relancerEtAttendre();
+    const a = ageMin(), seance = ['NQ=F', '^FCHI', '^GSPC'].some((t) => C.seanceOuverte(t, Date.now()));
+    if (a != null && a > FRAICHEUR_MAX_MIN && !attente && (seance || force)) await relancerEtAttendre();
   }
   async function relancerEtAttendre() {
     const dernier = Number(store.get('td_dispatch') || 0);
@@ -134,6 +138,7 @@
   const marche = (p) => ({ spot: spot(p), eurusd: eurusd(), prixBroker: p.prix_broker });
   const suivis = () => (journal.positions || []).map((p) => ({ p, s: C.suiviPosition(p, marche(p)) }));
   const ouvertes = () => suivis().filter((x) => x.s.statut === 'ouverte');
+  const prixActuels = () => Object.fromEntries(ouvertes().filter((x) => x.s.prix != null).map((x) => [x.p.id, x.s.prix]));
   const calendrier = () => (daily && daily.calendrier) || [];
   const auj = () => C.jourParis(Date.now());
   const maintenantHM = () => C.heureParis(Date.now());
@@ -161,7 +166,7 @@
     const al = C.alertes({ suivis: sv, quotes, calendrier: calendrier(), maintenant: now });
     const exp = dateExp();
     if (isFinite(exp) && exp - now < 7 * 86400000) al.push({ niveau: exp < now ? 'rouge' : 'orange', texte: exp < now ? 'Votre clé a expiré : créez-en une autre dans Réglages.' : 'Votre clé expire le ' + jourLong(new Date(exp).toISOString().slice(0, 10)) + '.' });
-    const alertesHtml = al.map((a) => `<div class="alerte ${a.niveau}" role="alert">${esc(a.texte)}</div>`).join('');
+    const alertesHtml = al.length ? `<div role="status" aria-live="polite">${al.map((a) => `<div class="alerte ${a.niveau}">${esc(a.texte)}</div>`).join('')}</div>` : '';
     const tk = (nom, t, d = 0) => { const q = px(t); return `<div class="tk"><span class="lbl">${nom}</span><b class="num">${q ? nb(q.price, d) : '—'}</b><small class="num ${cls(q && q.change_pct)}">${q ? pct(q.change_pct, true) : ''}</small></div>`; };
     const pea = [['LVMH', 'MC.PA'], ['Stellantis', 'STLAP.PA'], ['TotalEnergies', 'TTE.PA'], ['Air Liquide', 'AI.PA'], ['Schneider', 'SU.PA'], ['LQQ', 'LQQ.PA']]
       .map(([n, t]) => { const q = px(t); return `<div class="list-row"><span class="t">${n}</span><span class="num">${q ? nb(q.price, 2) + ' € <span class="' + cls(q.change_pct) + '">' + pct(q.change_pct, true) + '</span>' : '—'}</span></div>`; }).join('');
@@ -249,7 +254,7 @@
       ${c('Gain moyen', eur(s.gain_moyen, { signe: true }), 'up')}
       ${c('Perte moyenne', eur(s.perte_moyenne), 'down')}
       ${c('Gains ÷ pertes', s.profit_factor == null ? '—' : nb(s.profit_factor, 2))}
-      ${c('Pire série', eur(s.creux_max), 'down')}</div>` +
+      ${c('Plus forte baisse', eur(s.creux_max), 'down')}</div>` +
       (s.trous.length ? '<p class="muted" style="margin-top:12px">' + s.trous.map(esc).join('<br>') + '</p>' : '');
   }
 
@@ -281,7 +286,7 @@
     token = v; store.set('td_token', v); $('token-in').value = ''; $('login-err').textContent = ''; connecte();
   };
   $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) afficherOnglet(b.dataset.tab); };
-  $('refresh').onclick = () => { store.del('td_dispatch'); actualiser(); };
+  $('refresh').onclick = () => { store.del('td_dispatch'); actualiser(true); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden && token) actualiser(); });
   document.addEventListener('change', (e) => { if (e.target.id === 'j-mois') { jMois = e.target.value; rendreJournal(); } if (e.target.id === 'j-sj') { jSj = e.target.value; rendreJournal(); } });
 
@@ -375,6 +380,7 @@
       return { sj, sens, strike, prix, stopPct, parite, spotNow, devise, mise, q, d, barr: num(val('t-barr')) };
     };
     const maj = () => {
+      $('t-mise').previousSibling.textContent = val('t-mode') === 'risque' ? 'Perte maximale (€)' : 'Mise (€)';
       const x = lire(); if (qAuto && x.q) $('t-q').value = ''; $('t-q').placeholder = x.q ? String(x.q) : '';
       let h = '';
       const frais = num(val('t-frais')) || 0;
@@ -390,7 +396,7 @@
       if (lev) h += ligne('Levier', '×' + nb(lev, 1)) + ligne('Marge avant barrière', pct(C.distanceBarriere(x.spotNow, x.barr ?? x.strike, x.sens)));
       const rr = C.ratioGainRisque(x.spotNow, num(val('t-ssl')), num(val('t-cible'))); if (rr != null) h += ligne('Gain / risque', nb(rr, 2));
       $('t-out').innerHTML = h;
-      const w = C.verifierRegles({ journal, sens: x.sens, sousJacent: x.sj, prix: x.prix, levierTurbo: lev, stopPct: x.stopPct, mise: x.q && x.prix ? x.q * x.prix : null, calendrier: calendrier(), maintenant: Date.now() });
+      const w = C.verifierRegles({ journal, sens: x.sens, sousJacent: x.sj, strike: x.strike, prix: x.prix, levierTurbo: lev, stopPct: x.stopPct, mise: x.q && x.prix ? x.q * x.prix : null, calendrier: calendrier(), maintenant: Date.now(), prixActuels: prixActuels() });
       $('t-av').innerHTML = w.length ? `<div class="alerte orange">${w.map((t) => '<div>' + esc(t) + '</div>').join('')}</div>` : '';
     };
     $('sheet-body').addEventListener('input', maj); $('sheet-body').addEventListener('change', maj); maj();
@@ -402,7 +408,7 @@
       if (err) { $('t-err').textContent = err; return; }
       const barriere = x.barr ?? x.strike, em = val('t-em') || null, sjNom = x.sj;
       const lev = x.spotNow ? C.levier(x.spotNow, x.strike, x.sens) : null;
-      const w = C.verifierRegles({ journal, sens: x.sens, sousJacent: x.sj, prix: x.prix, levierTurbo: lev, stopPct: x.stopPct, mise: x.q * x.prix, calendrier: calendrier(), maintenant: Date.now() });
+      const w = C.verifierRegles({ journal, sens: x.sens, sousJacent: x.sj, strike: x.strike, prix: x.prix, levierTurbo: lev, stopPct: x.stopPct, mise: x.q * x.prix, calendrier: calendrier(), maintenant: Date.now(), prixActuels: prixActuels() });
       const pos = {
         id: nouvelId(journal), libelle: `${x.sens} ${sjNom} ${x.strike} Turbo${barriere === x.strike ? ' BEST' : ''}${em ? ' (' + em + ')' : ''}`,
         sous_jacent: sjNom, sens: x.sens, emetteur: em, isin: val('t-isin') || null, reference_courtier: null,
@@ -623,7 +629,7 @@
         <div class="grid2">${champ('r-eur-c', 'EUR, CALL', pc(F.EUR.CALL))}${champ('r-eur-p', 'EUR, PUT', pc(F.EUR.PUT))}</div></details>
       <p class="err" id="r-err" role="alert"></p>
       <div class="row"><button class="btn ghost" data-fermer>Fermer</button><button class="btn" id="r-go">Vérifier</button></div>
-      <p class="muted" style="margin-top:12px">Turbo Desk v3 · données privées dans turbo-brief</p>`);
+      <p class="muted" style="margin-top:12px">Turbo Desk v3.1 · données privées dans turbo-brief</p>`);
     $('r-go').onclick = () => {
       if (dateOk(val('r-exp'))) { store.set('td_exp_user', val('r-exp')); rendre(); }
       const poche = num(val('r-poche')), mise = num(val('r-mise')), stop = num(val('r-stop')), frais = num(val('r-frais'));
@@ -633,6 +639,9 @@
       if (err) { $('r-err').textContent = err; return; }
       const reg = { ...(journal.regles || {}), poche_eur: poche, mise_defaut_eur: mise, stop_pct: stop, frais_eur: frais,
         financement: { USD: { CALL: f[0] / 100, PUT: f[1] / 100 }, EUR: { CALL: f[2] / 100, PUT: f[3] / 100 } } };
+      const pareil = poche === R.poche_eur && mise === R.mise_defaut_eur && stop === R.stop_pct && frais === fraisDefaut()
+        && ['USD', 'EUR'].every((d, k) => Math.abs(f[2 * k] / 100 - C.FINANCEMENT[d].CALL) < 1e-9 && Math.abs(f[2 * k + 1] / 100 - C.FINANCEMENT[d].PUT) < 1e-9);
+      if (pareil) { fermer(); toast('Enregistré sur ce téléphone. Règles inchangées.', 'ok'); return; }
       confirmer('Confirmer les règles',
         ligne('Poche', `${eur(R.poche_eur)} → ${eur(poche)}`) + ligne('Mise par défaut', `${eur(R.mise_defaut_eur)} → ${eur(mise)}`) + ligne('Stop', `${nb(R.stop_pct)} % → ${nb(stop)} %`)
         + ligne('Frais par ordre', `${eur(fraisDefaut())} → ${eur(frais)}`) + ligne('Financement USD CALL / PUT', `${nb(f[0], 2)} % / ${nb(f[1], 2)} %`) + ligne('Financement EUR CALL / PUT', `${nb(f[2], 2)} % / ${nb(f[3], 2)} %`),
