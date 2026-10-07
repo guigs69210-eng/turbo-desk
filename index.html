@@ -2,9 +2,84 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E1A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Turbo Desk">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
 <title>Turbo Desk</title>
-<style>body{font:16px system-ui,sans-serif;background:#10141a;color:#e8edf3;display:grid;place-items:center;min-height:100vh;margin:0}</style>
+<link rel="stylesheet" href="app.css">
 </head>
-<body><p>Turbo Desk — bientôt.</p></body>
+<body>
+<header class="top">
+  <h1>Turbo Desk</h1>
+  <div class="fresh" id="fresh" role="status" aria-live="polite"></div>
+  <button class="icon-btn" id="refresh" aria-label="Actualiser">↻</button>
+</header>
+
+<main id="main">
+  <!-- Saisie du token (affichée seulement s'il manque) -->
+  <section id="login" class="card" hidden>
+    <h2>Connexion</h2>
+    <p>Collez votre clé GitHub. Elle reste sur ce téléphone, nulle part ailleurs.</p>
+    <input id="token-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Clé GitHub" placeholder="github_pat_…">
+    <button class="btn" id="token-save">Enregistrer</button>
+    <p class="err" id="login-err" role="alert"></p>
+  </section>
+
+  <section id="tab-today" class="tab" hidden></section>
+  <section id="tab-pos" class="tab" hidden></section>
+  <section id="tab-journal" class="tab" hidden></section>
+  <section id="tab-stats" class="tab" hidden></section>
+</main>
+
+<button class="fab" id="fab" aria-label="Nouveau trade">+ Trade</button>
+
+<nav class="tabs" id="tabs" aria-label="Onglets">
+  <button data-tab="today" aria-selected="true">Aujourd'hui</button>
+  <button data-tab="pos">Positions</button>
+  <button data-tab="journal">Journal</button>
+  <button data-tab="stats">Stats</button>
+</nav>
+
+<!-- Feuille « + Trade » : calculette, rien n'est enregistré -->
+<div class="sheet-bg" id="sheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-t">
+    <h2 id="sheet-t">Nouveau trade</h2>
+    <p class="muted">Calculette seulement. Rien n'est enregistré dans le journal.</p>
+    <label>Sens
+      <select id="n-sens"><option>CALL</option><option>PUT</option></select>
+    </label>
+    <label>Prix du turbo (€)
+      <input id="n-prix" inputmode="decimal" placeholder="3,98">
+    </label>
+    <label>Mise (€)
+      <input id="n-mise" inputmode="decimal" placeholder="">
+    </label>
+    <label>Stop (%)
+      <input id="n-stop" inputmode="decimal" value="-40">
+    </label>
+    <label>Entrée sous-jacent
+      <input id="n-entree" inputmode="decimal">
+    </label>
+    <label>Stop sous-jacent
+      <input id="n-ssl" inputmode="decimal">
+    </label>
+    <label>Cible sous-jacent
+      <input id="n-cible" inputmode="decimal">
+    </label>
+    <dl class="calc" id="n-out"></dl>
+    <div class="row">
+      <button class="btn ghost" id="sheet-close">Fermer</button>
+      <button class="btn" disabled>Enregistrer (bientôt)</button>
+    </div>
+  </div>
+</div>
+
+<script src="calc.js"></script>
+<script src="app.js"></script>
+</body>
 </html>
