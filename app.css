@@ -139,3 +139,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 .list-row.ann::before{content:"";position:absolute;left:0;top:50%;width:8px;height:8px;margin-top:-4px;border-radius:50%;background:var(--amber)}
 .list-row.ann.fort::before{background:var(--red)}
 .list-row.ann.majeure .t{color:var(--red)}
+.reco .idee{border-top:1px solid var(--border);padding-top:10px;margin-top:10px}
+.reco .idee:first-of-type{border-top:0;margin-top:4px;padding-top:0}
+.reco .idee.vieille{opacity:.85}
+.reco .s{font-size:13px;color:var(--muted);margin:4px 0}

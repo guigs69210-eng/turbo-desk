@@ -349,6 +349,46 @@
     return w;
   }
 
+  /* ---------------- reco du matin (reco/latest.json) ---------------- */
+
+  // Une idée de la reco, revue par l'app : entrée (milieu de zone), R:R recalculé, cohérence des niveaux,
+  // écart du cours actuel à l'entrée. `orange` : à ne pas suivre les yeux fermés.
+  function revoirIdee(idee, spot, recoDuJour) {
+    const e = idee.entree || {}, put = String(idee.sens).toUpperCase() === 'PUT', sgn = put ? -1 : 1;
+    const bas = isNum(e.bas) ? e.bas : e.haut, haut = isNum(e.haut) ? e.haut : e.bas;
+    const entree = isNum(bas) && isNum(haut) ? (bas + haut) / 2 : null;
+    const r = { entree, ratio: null, incoherences: [], ecart_pct: null, orange: [] };
+    if (isNum(entree) && isNum(idee.stop) && isNum(idee.objectif1)) {
+      const risque = sgn * (entree - idee.stop), gain = sgn * (idee.objectif1 - entree);
+      if (risque > 0) r.ratio = Math.round((gain / risque) * 100) / 100;
+      if (!(risque > 0)) r.incoherences.push('stop du mauvais côté de l\'entrée');
+      if (!(gain > 0)) r.incoherences.push('objectif du mauvais côté de l\'entrée');
+    }
+    if (isNum(idee.barriere) && isNum(idee.stop) && !(sgn * (idee.stop - idee.barriere) > 0)) r.incoherences.push('barrière avant le stop');
+    if (isNum(spot) && isNum(bas) && isNum(haut)) {
+      const lo = Math.min(bas, haut), hi = Math.max(bas, haut), d = spot < lo ? lo - spot : spot > hi ? spot - hi : 0;
+      r.ecart_pct = Math.round((d / spot) * 10000) / 100;
+      if (r.ecart_pct > 0.5) r.orange.push(`cours à ${String(r.ecart_pct).replace('.', ',')} % de l'entrée`);
+    }
+    if (!recoDuJour) r.orange.push('reco d\'un autre jour');
+    if (r.incoherences.length) r.orange.push('niveaux incohérents : ' + r.incoherences.join(', '));
+    return r;
+  }
+
+  // Track record des recos (fichier reco/scores.json écrit par score.yml). Aucune conclusion sous 30 idées.
+  function statsRecos(scores) {
+    const l = (scores || []).filter((s) => s && s.issue);
+    const decl = l.filter((s) => s.declenchee), rs = decl.map((s) => s.r).filter(isNum);
+    const somme = rs.reduce((t, v) => t + v, 0);
+    return {
+      idees: l.length, declenchees: decl.length,
+      objectif: decl.filter((s) => s.issue === 'objectif').length, stop: decl.filter((s) => s.issue === 'stop').length,
+      r_total: Math.round(somme * 100) / 100, r_moyen: rs.length ? Math.round((somme / rs.length) * 100) / 100 : null,
+      gagnantes_pct: rs.length ? Math.round((rs.filter((v) => v > 0).length / rs.length) * 100) : null,
+      assez: l.length >= 30,
+    };
+  }
+
   // Réalisé d'une journée (ventes datées ce jour-là), valeur totale (caisse + positions au prix estimé).
   function realiseDuJour(journal, jour) {
     let t = 0;
@@ -377,7 +417,7 @@
 
   const Calc = { REGLES, configurer, FINANCEMENT, SOUS_JACENTS, cleSousJacent, devisePosition, montantExecution, bilanPosition,
     strikeDuJour, valeurTheorique, levier, distanceBarriere, prixCourant, suiviPosition, dimensionner,
-    ratioGainRisque, cash, stats, formatEur, actives, parisVersMs, jourParis, heureParis, annoncesProches, enPeriodeFOMC, estMajeure,
+    ratioGainRisque, cash, stats, formatEur, actives, parisVersMs, jourParis, heureParis, annoncesProches, enPeriodeFOMC, estMajeure, revoirIdee, statsRecos,
     marcheOuvert, seanceOuverte, alertes, verifierRegles, realiseDuJour, valeurTotale };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Calc;

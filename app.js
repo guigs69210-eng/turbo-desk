@@ -13,7 +13,7 @@
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignoré */ } },
   };
   let token = store.get('td_token');
-  let journal = null, journalSha = null, quotes = null, daily = null;
+  let journal = null, journalSha = null, quotes = null, daily = null, reco = null, scores = null;
   let tabCourant = 'today';
   let attente = false;
 
@@ -95,7 +95,8 @@
     const btn = $('refresh'); btn.classList.add('spin');
     try {
       let jm;
-      [jm, quotes, daily] = await Promise.all([lireMeta('journal.json'), lire('quotes/latest.json'), lire('daily/latest.json').catch(() => null)]);
+      [jm, quotes, daily, reco, scores] = await Promise.all([lireMeta('journal.json'), lire('quotes/latest.json'), lire('daily/latest.json').catch(() => null),
+        lire('reco/latest.json').catch(() => null), lire('reco/scores.json').catch(() => null)]);
       journal = jm.data; journalSha = jm.sha;
       C.configurer(journal.regles || {});
       majFraicheur(); rendre();
@@ -156,7 +157,13 @@
   const suivis = () => (journal.positions || []).map((p) => ({ p, s: C.suiviPosition(p, marche(p)) }));
   const ouvertes = () => suivis().filter((x) => x.s.statut === 'ouverte');
   const prixActuels = () => Object.fromEntries(ouvertes().filter((x) => x.s.prix != null).map((x) => [x.p.id, x.s.prix]));
-  const calendrier = () => (daily && daily.calendrier) || [];
+  // Calendrier de la veille, complété par les événements de la reco (créneaux absents seulement, jamais « majeurs »).
+  const calendrier = () => {
+    const base = (daily && daily.calendrier) || [], vus = new Set(base.map((e) => e.date + ' ' + e.heure_paris));
+    const ajout = ((reco && reco.evenements) || []).filter((e) => e && e.date && /^\d\d:\d\d$/.test(e.heure_paris || '') && !vus.has(e.date + ' ' + e.heure_paris))
+      .map((e) => ({ date: e.date, heure_paris: e.heure_paris, nom: e.nom, regle: e.regle, impact: e.impact === 'fort' ? 'fort' : 'moyen', type: 'macro', majeure: false, source: 'reco' }));
+    return base.concat(ajout);
+  };
   const auj = () => C.jourParis(Date.now());
   const maintenantHM = () => C.heureParis(Date.now());
   const trouver = (j, id) => j.positions.find((p) => p.id === id);
@@ -196,18 +203,41 @@
       jourVu = jour;
       return titre + `<div class="list-row ann ${e.impact === 'moyen' ? 'moyen' : 'fort'}${C.estMajeure(e) ? ' majeure' : ''}"><span class="l"><span class="t">${esc(e.nom)}</span><span class="s">${esc(e.regle || '')}</span></span><span class="num">${e.heure_paris || 'journée'}</span></div>`;
     }).join('') : '<p class="muted">Rien dans les 7 prochains jours.</p>';
+    const recoHtml = carteReco();
     const posHtml = ouv.length ? ouv.map(({ p, s }) => cartePosition(p, s, true)).join('') : '<div class="card"><p class="muted">Aucune position ouverte.</p></div>';
     const trou = (journal.trous || [])[0];
     $('tab-today').innerHTML = alertesHtml +
       `<div class="card hero"><div class="hero-l"><span class="lbl">Total</span><b class="num">${eur(C.valeurTotale(journal, sv))}</b></div>
         <div class="hero-r"><span class="lbl">Latent (${ouv.length})</span><b class="num ${cls(latent)}">${eur(latent, { signe: true })}</b></div>
         <div class="span2 lbl num">Caisse ${eur(C.cash(journal))} · Engagé ${eur(engage)} · Jour <span class="${cls(realise)}">${eur(realise, { signe: true })}</span></div></div>` +
+      recoHtml +
       `<h2 class="sect">Positions ouvertes</h2>${posHtml}` +
       `<div class="card"><h2>Annonces (7 jours)</h2>${agenda}</div>` +
       `<div class="card"><h2>Marchés</h2><div class="ticker">${tk('Nasdaq 100', 'NQ=F')}${tk('CAC 40', '^FCHI')}${tk('S&P 500', '^GSPC')}${tk('VIX', '^VIX', 2)}${tk('EUR/USD', 'EURUSD=X', 4)}</div></div>` +
       (inst ? `<div class="card"><h2>Veille (${jj(daily.date_paris)})</h2>${inst}</div>` : '') +
       `<div class="card"><h2>PEA</h2>${pea}</div>` +
       (trou ? `<p class="trou">Journal incomplet du ${jj(trou.du)} au ${jj(trou.au)} (trades non saisis).</p>` : '');
+  }
+
+  // Carte « Reco du matin » : niveaux de la routine, R:R recalculé, orange si vieille, loin du cours ou incohérente.
+  function carteReco() {
+    if (!reco) return '';
+    const duJour = reco.date === auj(), idees = reco.idees || [];
+    const tete = `<h2>Reco du ${duJour ? 'jour' : esc(jj(reco.date || ''))}</h2>${reco.posture ? `<p class="s">${esc(reco.posture)}</p>` : ''}`;
+    if (reco.a_plat || !idees.length) return `<div class="card reco">${tete}<p><b>À plat.</b> ${esc(reco.raison_a_plat || '')}</p></div>`;
+    const lignes = idees.map((i, k) => {
+      const sj = C.cleSousJacent(i.indice) || i.indice, q = C.SOUS_JACENTS[sj] && px(C.SOUS_JACENTS[sj].quote);
+      const v = C.revoirIdee(i, q ? q.price : null, duJour), put = String(i.sens).toUpperCase() === 'PUT';
+      const alerte = v.orange.length ? `<div class="alerte orange">${esc(v.orange.join(' · '))}</div>` : '';
+      return `<div class="idee${v.orange.length ? ' vieille' : ''}">
+        <div class="list-row"><span class="t">${esc(SJ_NOM[sj] || i.indice)} <span class="${put ? 'down' : 'up'}">${put ? 'PUT' : 'CALL'}</span></span><span class="num">Conviction ${esc(String(i.conviction ?? '—'))}/10</span></div>
+        <p class="s">${esc((i.entree && i.entree.condition) || '')}${i.jusqua ? ' · jusqu\'à ' + esc(i.jusqua) : ''}</p>
+        <dl class="calc">${ligne('Entrée', v.entree == null ? '—' : nb(v.entree, 0))}${ligne('Stop', nb(i.stop, 0), 'down')}${ligne('Objectif', nb(i.objectif1, 0) + (i.objectif2 ? ' puis ' + nb(i.objectif2, 0) : ''), 'up')}
+          ${ligne('Barrière turbo', (put ? '≥ ' : '≤ ') + nb(i.barriere, 0))}${ligne('Gain / risque', v.ratio == null ? '—' : nb(v.ratio, 2))}${q ? ligne('Cours', nb(q.price, 0)) : ''}</dl>
+        ${i.raison ? `<p class="s">${esc(i.raison)}</p>` : ''}${i.invalidation ? `<p class="s">Invalidation : ${esc(i.invalidation)}</p>` : ''}${alerte}
+        <div class="row"><button class="btn${v.orange.length ? ' ghost' : ''}" data-act="reco" data-i="${k}">Prendre ce trade</button></div></div>`;
+    }).join('');
+    return `<div class="card reco">${tete}${lignes}<p class="muted">Pas un conseil en investissement.</p></div>`;
   }
 
   // Carte d'une position ouverte. `courte` : version de l'écran Aujourd'hui.
@@ -281,7 +311,8 @@
       <div class="puces">${[['', 'Call et Put'], ['CALL', 'Call'], ['PUT', 'Put']].map(([v, t]) => puce('sens', v, t, bilan.sens === v)).join('')}
         <select id="b-sj" aria-label="Sous-jacent"><option value="">Tous</option>${Object.entries(SJ_NOM).map(([k, n]) => `<option value="${k}" ${k === bilan.sj ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
       <label class="check"><input type="checkbox" id="b-doub" ${bilan.doub ? 'checked' : ''}>Sans les doublons probables</label>`;
-    if (!tr.length) { $('tab-stats').innerHTML = filtres + '<div class="empty">Aucun trade fermé sur ce choix.</div>'; return; }
+    const cr = carteRecos();
+    if (!tr.length) { $('tab-stats').innerHTML = filtres + '<div class="empty">Aucun trade fermé sur ce choix.</div>' + cr; return; }
     const tuile = (n, v, k) => `<div class="tuile"><span class="lbl">${n}</span><b class="num ${k || ''}">${v}</b></div>`;
     const sp = somme(pe), pf = sp < 0 ? somme(g) / -sp : null;
     const tuiles = `<div class="tuiles">${tuile('Résultat', eur(total, { signe: true }), cls(total))}${tuile('Trades', tr.length)}${tuile('Gagnants', nb((g.length / tr.length) * 100, 0) + ' %')}
@@ -317,7 +348,17 @@
     $('tab-stats').innerHTML = filtres + tuiles + carteCourbe + carteBarres +
       (bilan.sens ? '' : repart('Call ou Put', [['CALL', 'Call'], ['PUT', 'Put']], sensDe)) +
       (bilan.sj ? '' : repart('Par sous-jacent', [...Object.entries(SJ_NOM), ['AUTRE', 'Autres']], (p) => C.cleSousJacent(p.sous_jacent) || 'AUTRE')) + carteSemaine +
-      ((journal.trous || []).length ? '<p class="trou">' + journal.trous.map((t) => esc(t.message)).join('<br>') + '</p>' : '');
+      cr + ((journal.trous || []).length ? '<p class="trou">' + journal.trous.map((t) => esc(t.message)).join('<br>') + '</p>' : '');
+  }
+  // Track record des recos du matin (noté par score.yml sur barres de 5 min).
+  function carteRecos() {
+    const l = (scores && scores.idees) || [];
+    if (!l.length) return '<div class="card"><h2>Recos du matin</h2><p class="muted">Pas encore de reco notée.</p></div>';
+    const st = C.statsRecos(l), t = (n, v, k) => `<div class="tuile"><span class="lbl">${n}</span><b class="num ${k || ''}">${v}</b></div>`;
+    const r = (x) => (x == null ? '—' : (x > 0 ? '+' : '') + nb(x, 2) + ' R');
+    return `<div class="card"><h2>Recos du matin</h2><div class="tuiles">${t('Idées', st.idees)}${t('Déclenchées', st.declenchees)}${t('Objectif', st.objectif, 'up')}${t('Stop', st.stop, 'down')}
+      ${t('Gagnantes', st.gagnantes_pct == null ? '—' : st.gagnantes_pct + ' %')}${t('Moyenne', r(st.r_moyen), cls(st.r_moyen))}${t('Total', r(st.r_total), cls(st.r_total))}</div>
+      ${st.assez ? '' : `<p class="muted">Moins de 30 idées notées (${st.idees}) : trop tôt pour conclure.</p>`}</div>`;
   }
   // Barres verticales vertes (gain) ou rouges (perte) autour d'une ligne zéro.
   function barres(l) {
@@ -342,7 +383,7 @@
     window.scrollTo(0, 0);
   }
   function deconnecter(msg) {
-    token = ''; store.del('td_token'); store.del('td_exp'); store.del('td_exp_user'); journal = quotes = daily = null;
+    token = ''; store.del('td_token'); store.del('td_exp'); store.del('td_exp_user'); journal = quotes = daily = reco = scores = null;
     $('login').hidden = false; $('tabs').hidden = true; $('fab').hidden = true; $('settings').hidden = true;
     document.querySelectorAll('.tab').forEach((s) => { s.hidden = true; });
     $('login-err').textContent = msg || '';
@@ -422,7 +463,7 @@
   const fraisDefaut = () => (isFinite(C.REGLES.frais_eur) ? C.REGLES.frais_eur : 0);
 
   /* 1) + Trade : achat d'une nouvelle position (5 champs, le reste sous « Plus ») */
-  function feuilleTrade() {
+  function feuilleTrade(pre) {
     const R = C.REGLES;
     ouvrir(`<h2 id="sheet-t">Nouveau trade</h2>
       <div class="grid2">${choix('t-sj', 'Sous-jacent', Object.entries(SJ_NOM))}${choix('t-sens', 'Sens', ['CALL', 'PUT'])}</div>
@@ -440,6 +481,15 @@
       <div id="t-av"></div><p class="err" id="t-err" role="alert"></p>
       <div class="stickybar"><dl class="calc" id="t-out"></dl>
         <div class="row"><button class="btn ghost" data-fermer>Fermer</button><button class="btn" id="t-go">Vérifier</button></div></div>`);
+    if (pre) {   // « Prendre ce trade » : sous-jacent, sens, stop, cible, conviction et note de la reco ; strike et prix à saisir
+      const ent = pre.idee.entree || {};
+      $('t-sj').value = pre.sj; $('t-sens').value = String(pre.idee.sens).toUpperCase() === 'PUT' ? 'PUT' : 'CALL';
+      $('t-strike').placeholder = (String(pre.idee.sens).toUpperCase() === 'PUT' ? '≥ ' : '≤ ') + pre.idee.barriere + ' (barrière de la reco)';
+      if (pre.idee.stop != null) $('t-ssl').value = pre.idee.stop;
+      if (pre.idee.objectif1 != null) $('t-cible').value = pre.idee.objectif1;
+      if (pre.idee.conviction != null) $('t-conv').value = pre.idee.conviction;
+      $('t-note').value = `Reco du ${jj(pre.date)} : ${ent.condition || ''}`.trim();
+    }
     let qAuto = true;
     $('t-q').addEventListener('input', () => { qAuto = $('t-q').value === ''; });
     const lire = () => {
@@ -487,7 +537,7 @@
         strike: x.strike, barriere, parite: x.parite, devise: x.devise,
         executions: [{ date: val('t-date'), heure: val('t-heure') || null, type: 'achat', quantite: x.q, prix: x.prix, frais }],
         plan: { stop_pct: x.stopPct, stop_prix: null, cibles: num(val('t-cible')) != null ? [num(val('t-cible'))] : [], invalidation: num(val('t-ssl')) },
-        conviction: conv, setup: null, reco_liee: null, regle_respectee: w.length === 0, note: val('t-note') || null,
+        conviction: conv, setup: pre ? 'reco' : null, reco_liee: pre ? `${pre.date}#${pre.k}` : null, regle_respectee: w.length === 0, note: val('t-note') || null,
       };
       if (w.length) pos.avertissements = w;
       const montant = C.montantExecution(pos.executions[0]), avant = C.cash(journal);
@@ -724,6 +774,7 @@
   /* ---------- actions des boutons (écrans et feuilles) ---------- */
   const ACTIONS = { vente: feuilleVente, prix: feuillePrix, strike: feuilleStrike, fiche: feuilleFiche, corriger: (id, i) => feuilleCorrection(id, Number(i)),
     bfiltre: (g, v) => { bilan[g] = v; if (g === 'per') store.set('td_bper', v); rendreStats(); },
+    reco: (id, i) => { const idee = reco && reco.idees && reco.idees[Number(i)]; if (idee) feuilleTrade({ idee, k: Number(i), date: reco.date, sj: C.cleSousJacent(idee.indice) || 'NQ' }); },
     caisse: feuilleCaisse, depot: () => feuilleMouvement('depot'), retrait: () => feuilleMouvement('retrait'), comparer: feuilleComparer,
     cle: () => { fermer(); deconnecter(''); }, effacer: () => { fermer(); deconnecter('Clé effacée de ce téléphone.'); } };
   document.addEventListener('click', (e) => {
