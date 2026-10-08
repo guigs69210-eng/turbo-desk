@@ -222,15 +222,17 @@
       ouv.map(({ p, s }) => cartePosition(p, s, false)).join('');
   }
 
-  let jMois = '', jSj = '';
+  let jMois = '', jSj = '', jSens = '';
+  const sensDe = (p) => (String(p.sens).toUpperCase() === 'PUT' ? 'PUT' : 'CALL');
   function rendreJournal() {
     const tous = suivis().filter((x) => x.s.statut === 'fermee');
     const mois = [...new Set(tous.map((x) => (x.s.date_sortie || '').slice(0, 7)).filter(Boolean))].sort().reverse();
-    const fermees = tous.filter((x) => (!jMois || (x.s.date_sortie || '').startsWith(jMois)) && (!jSj || C.cleSousJacent(x.p.sous_jacent) === jSj))
+    const fermees = tous.filter((x) => (!jMois || (x.s.date_sortie || '').startsWith(jMois)) && (!jSj || C.cleSousJacent(x.p.sous_jacent) === jSj) && (!jSens || sensDe(x.p) === jSens))
       .sort((a, b) => String(b.s.date_sortie || '').localeCompare(String(a.s.date_sortie || '')));
     const total = fermees.reduce((t, x) => t + x.s.pnl_realise, 0);
-    const filtres = `<div class="grid2"><label>Mois<select id="j-mois"><option value="">Tous</option>${mois.map((m) => `<option value="${m}" ${m === jMois ? 'selected' : ''}>${m.slice(5)}/${m.slice(0, 4)}</option>`).join('')}</select></label>
-      <label>Sous-jacent<select id="j-sj"><option value="">Tous</option>${Object.entries(SJ_NOM).map(([k, n]) => `<option value="${k}" ${k === jSj ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>`;
+    const filtres = `<div class="grid3 filtres"><label>Mois<select id="j-mois"><option value="">Tous</option>${mois.map((m) => `<option value="${m}" ${m === jMois ? 'selected' : ''}>${m.slice(5)}/${m.slice(0, 4)}</option>`).join('')}</select></label>
+      <label>Sous-jacent<select id="j-sj"><option value="">Tous</option>${Object.entries(SJ_NOM).map(([k, n]) => `<option value="${k}" ${k === jSj ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <label>Sens<select id="j-sens"><option value="">Tous</option>${['CALL', 'PUT'].map((k) => `<option value="${k}" ${k === jSens ? 'selected' : ''}>${k === 'CALL' ? 'Call' : 'Put'}</option>`).join('')}</select></label></div>`;
     $('tab-journal').innerHTML = filtres +
       (fermees.length ? `<div class="card"><div class="list-row" style="border:0"><span class="lbl">${fermees.length} trade${fermees.length > 1 ? 's' : ''}</span><b class="num ${cls(total)}">${eur(total, { signe: true })}</b></div>` + fermees.map(({ p, s }) =>
         `<button class="list-row ligne-btn" data-act="fiche" data-id="${esc(p.id)}"><span class="l"><span class="t">${esc(p.libelle)}${s.doublon_probable ? '<span class="tag">doublon ?</span>' : ''}${s.incomplet ? '<span class="tag">incomplet</span>' : ''}</span>
@@ -238,19 +240,73 @@
           <b class="num ${cls(s.pnl_realise)}">${eur(s.pnl_realise, { signe: true })}</b></button>`).join('') + '</div>' : '<div class="empty">Aucun trade pour ce choix.</div>');
   }
 
+  /* Bilan : période, filtres, chiffres clés et graphiques (SVG maison, sans bibliothèque). */
+  const PERIODES = [['7', '7 j'], ['30', '30 j'], ['90', '3 mois'], ['365', '1 an'], ['', 'Tout']];
+  const bilan = { per: store.get('td_bper') || '30', sens: '', sj: '', doub: false };
+  const decaler = (jour, n) => new Date(Date.parse(jour + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+  const lundi = (jour) => decaler(jour, -((new Date(jour + 'T12:00:00Z').getUTCDay() + 6) % 7));
+  const puce = (grp, v, txt, actif) => `<button class="puce" data-act="bfiltre" data-id="${grp}" data-i="${v}" aria-pressed="${actif}">${txt}</button>`;
+
   function rendreStats() {
-    const s = C.stats(journal), h = C.stats(journal, { sansDoublons: true });
-    const c = (n, v, k) => `<div class="stat"><span class="lbl">${n}</span><b class="num ${k || ''}">${v}</b></div>`;
-    $('tab-stats').innerHTML = `<div class="stats">
-      ${c('Résultat réalisé', eur(s.pnl_total, { signe: true }), cls(s.pnl_total))}
-      ${c('Sans les doublons', eur(h.pnl_total, { signe: true }), cls(h.pnl_total))}
-      ${c('Trades gagnants', s.taux_reussite_pct == null ? '—' : nb(s.taux_reussite_pct, 0) + ' %')}
-      ${c('Trades fermés', s.positions_fermees)}
-      ${c('Gain moyen', eur(s.gain_moyen, { signe: true }), 'up')}
-      ${c('Perte moyenne', eur(s.perte_moyenne), 'down')}
-      ${c('Gains ÷ pertes', s.profit_factor == null ? '—' : nb(s.profit_factor, 2))}
-      ${c('Plus forte baisse', eur(s.creux_max), 'down')}</div>` +
-      (s.trous.length ? '<p class="muted" style="margin-top:12px">' + s.trous.map(esc).join('<br>') + '</p>' : '');
+    const debut = bilan.per ? decaler(auj(), 1 - Number(bilan.per)) : '';
+    const tr = suivis().filter(({ p, s }) => s.statut === 'fermee' && s.date_sortie && (!debut || s.date_sortie >= debut)
+      && (!bilan.sens || sensDe(p) === bilan.sens) && (!bilan.sj || C.cleSousJacent(p.sous_jacent) === bilan.sj) && (!bilan.doub || !s.doublon_probable))
+      .sort((x, y) => x.s.date_sortie.localeCompare(y.s.date_sortie));
+    const pn = tr.map((x) => x.s.pnl_realise), somme = (a) => a.reduce((t, v) => t + v, 0);
+    const g = pn.filter((v) => v > 0), pe = pn.filter((v) => v <= 0), total = somme(pn);
+    let cum = 0, haut = 0, creux = 0;
+    const courbe = pn.map((v) => { cum += v; haut = Math.max(haut, cum); creux = Math.min(creux, cum - haut); return cum; });
+    let serie = 0; for (let i = pn.length - 1; i >= 0 && (pn[i] > 0) === (pn[pn.length - 1] > 0); i--) serie++;
+    const filtres = `<div class="puces">${PERIODES.map(([v, t]) => puce('per', v, t, bilan.per === v)).join('')}</div>
+      <div class="puces">${[['', 'Call et Put'], ['CALL', 'Call'], ['PUT', 'Put']].map(([v, t]) => puce('sens', v, t, bilan.sens === v)).join('')}
+        <select id="b-sj" aria-label="Sous-jacent"><option value="">Tous</option>${Object.entries(SJ_NOM).map(([k, n]) => `<option value="${k}" ${k === bilan.sj ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <label class="check"><input type="checkbox" id="b-doub" ${bilan.doub ? 'checked' : ''}>Sans les doublons probables</label>`;
+    if (!tr.length) { $('tab-stats').innerHTML = filtres + '<div class="empty">Aucun trade fermé sur ce choix.</div>'; return; }
+    const tuile = (n, v, k) => `<div class="tuile"><span class="lbl">${n}</span><b class="num ${k || ''}">${v}</b></div>`;
+    const sp = somme(pe), pf = sp < 0 ? somme(g) / -sp : null;
+    const tuiles = `<div class="tuiles">${tuile('Résultat', eur(total, { signe: true }), cls(total))}${tuile('Trades', tr.length)}${tuile('Gagnants', nb((g.length / tr.length) * 100, 0) + ' %')}
+      ${tuile('Gain moyen', g.length ? eur(somme(g) / g.length, { signe: true }) : '—', 'up')}${tuile('Perte moyenne', pe.length ? eur(sp / pe.length) : '—', 'down')}${tuile('Gains ÷ pertes', pf == null ? '—' : nb(pf, 2))}
+      ${tuile('Meilleur', eur(Math.max(...pn), { signe: true }), 'up')}${tuile('Pire', eur(Math.min(...pn), { signe: true }), 'down')}${tuile('Série', serie + (pn[pn.length - 1] > 0 ? ' gagné' : ' perdu') + (serie > 1 ? 's' : ''), pn[pn.length - 1] > 0 ? 'up' : 'down')}</div>`;
+    // courbe du résultat cumulé
+    const W = 300, H = 110, mn = Math.min(0, ...courbe), mx = Math.max(0, ...courbe), ec = mx - mn || 1;
+    const X = (i) => (courbe.length < 2 ? W / 2 : (i / (courbe.length - 1)) * W), Y = (v) => H - 4 - ((v - mn) / ec) * (H - 8);
+    const pts = [[X(0), Y(0)], ...courbe.map((v, i) => [X(i), Y(v)])].map((q) => q.map((n) => n.toFixed(1)).join(',')).join(' ');
+    const coul = total >= 0 ? 'var(--green)' : 'var(--red)';
+    const carteCourbe = `<div class="card"><div class="list-row" style="border:0;padding:0 0 8px"><h2 style="margin:0">Résultat cumulé</h2><span class="lbl">Plus forte baisse <b class="num down">${eur(creux)}</b></span></div>
+      <svg class="graph" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Courbe du résultat cumulé, de 0 à ${eur(total, { signe: true })}">
+        <line x1="0" x2="${W}" y1="${Y(0)}" y2="${Y(0)}" class="zero"/><polygon points="0,${Y(0)} ${pts} ${W},${Y(0)}" fill="${coul}" opacity=".15"/>
+        <polyline points="${pts}" fill="none" stroke="${coul}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+      <div class="axe"><span>${jj(tr[0].s.date_sortie)}</span><span>${jj(tr[tr.length - 1].s.date_sortie)}</span></div></div>`;
+    // barres par jour, semaine ou mois selon l'étendue
+    const etendue = (Date.parse(tr[tr.length - 1].s.date_sortie) - Date.parse(tr[0].s.date_sortie)) / 86400000;
+    const pas = etendue <= 31 ? 'jour' : etendue <= 120 ? 'semaine' : 'mois';
+    const cle = (d) => (pas === 'jour' ? d : pas === 'semaine' ? lundi(d) : d.slice(0, 7));
+    const grp = new Map(); tr.forEach(({ s }) => { const k = cle(s.date_sortie); grp.set(k, (grp.get(k) || 0) + s.pnl_realise); });
+    const lbl = (k) => (pas === 'mois' ? ['jan', 'fév', 'mar', 'avr', 'mai', 'juin', 'juil', 'août', 'sep', 'oct', 'nov', 'déc'][Number(k.slice(5, 7)) - 1] : jj(k));
+    const carteBarres = `<div class="card"><h2>Résultat par ${pas}</h2>${barres([...grp].map(([k, v]) => [lbl(k), v]))}</div>`;
+    // jours de la semaine
+    const js = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'].map((n, i) => [n, somme(tr.filter((x) => new Date(x.s.date_sortie + 'T12:00:00Z').getUTCDay() === i + 1).map((x) => x.s.pnl_realise))]);
+    const carteSemaine = `<div class="card"><h2>Par jour de la semaine</h2>${barres(js)}</div>`;
+    // répartitions Call/Put et sous-jacents
+    const repart = (titre, cles, f) => {
+      const l = cles.map(([k, n]) => { const t = tr.filter((x) => f(x.p) === k).map((x) => x.s.pnl_realise); return { n, nb: t.length, tot: somme(t), gp: t.length ? (t.filter((v) => v > 0).length / t.length) * 100 : 0 }; }).filter((x) => x.nb);
+      const m = Math.max(...l.map((x) => Math.abs(x.tot)), 1);
+      return `<div class="card"><h2>${titre}</h2>${l.map((x) => `<div class="rep"><span class="t">${x.n}</span><span class="lbl num">${x.nb} · ${nb(x.gp, 0)} % gagnants</span><b class="num ${cls(x.tot)}">${eur(x.tot, { signe: true })}</b>
+        <div class="bar"><i style="width:${(Math.abs(x.tot) / m) * 100}%;background:${x.tot >= 0 ? 'var(--green)' : 'var(--red)'}"></i></div></div>`).join('')}</div>`;
+    };
+    $('tab-stats').innerHTML = filtres + tuiles + carteCourbe + carteBarres +
+      (bilan.sens ? '' : repart('Call ou Put', [['CALL', 'Call'], ['PUT', 'Put']], sensDe)) +
+      (bilan.sj ? '' : repart('Par sous-jacent', [...Object.entries(SJ_NOM), ['AUTRE', 'Autres']], (p) => C.cleSousJacent(p.sous_jacent) || 'AUTRE')) + carteSemaine +
+      ((journal.trous || []).length ? '<p class="trou">' + journal.trous.map((t) => esc(t.message)).join('<br>') + '</p>' : '');
+  }
+  // Barres verticales vertes (gain) ou rouges (perte) autour d'une ligne zéro.
+  function barres(l) {
+    const m = Math.max(...l.map(([, v]) => Math.abs(v)), 1), pos = l.some(([, v]) => v > 0), neg = l.some(([, v]) => v < 0);
+    const h0 = pos && neg ? 50 : neg ? 100 : 0, saut = Math.ceil(l.length / 7);   // h0 : hauteur de la ligne zéro (%)
+    return `<div class="barres" role="img" aria-label="${esc(l.map(([n, v]) => n + ' ' + eur(v, { signe: true })).join(', '))}">${l.map(([n, v], i) => {
+      const h = (Math.abs(v) / m) * (pos && neg ? 50 : 100);
+      return `<div class="col"><div class="zone"><em style="top:${100 - h0}%"></em><i class="${v >= 0 ? 'p' : 'n'}" style="height:${h}%;${v >= 0 ? 'bottom' : 'top'}:${v >= 0 ? h0 : 100 - h0}%"></i></div><span>${(l.length - 1 - i) % saut ? '' : esc(n)}</span></div>`;
+    }).join('')}</div>`;
   }
 
   function rendre() {
@@ -283,7 +339,8 @@
   $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) afficherOnglet(b.dataset.tab); };
   $('refresh').onclick = () => { store.del('td_dispatch'); actualiser(true); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden && token) actualiser(); });
-  document.addEventListener('change', (e) => { if (e.target.id === 'j-mois') { jMois = e.target.value; rendreJournal(); } if (e.target.id === 'j-sj') { jSj = e.target.value; rendreJournal(); } });
+  document.addEventListener('change', (e) => { if (e.target.id === 'j-mois') { jMois = e.target.value; rendreJournal(); } if (e.target.id === 'j-sj') { jSj = e.target.value; rendreJournal(); } if (e.target.id === 'j-sens') { jSens = e.target.value; rendreJournal(); }
+    if (e.target.id === 'b-sj') { bilan.sj = e.target.value; rendreStats(); } if (e.target.id === 'b-doub') { bilan.doub = e.target.checked; rendreStats(); } });
 
   /* ---------- feuilles : saisie → confirmation (totaux) → écriture ---------- */
   const champ = (id, lib, val, mode) => `<label>${lib}<input id="${id}" ${mode === 'date' ? 'type="date"' : mode === 'time' ? 'type="time"' : 'inputmode="' + (mode || 'decimal') + '"'} value="${esc(val == null ? '' : val)}"></label>`;
@@ -646,6 +703,7 @@
 
   /* ---------- actions des boutons (écrans et feuilles) ---------- */
   const ACTIONS = { vente: feuilleVente, prix: feuillePrix, strike: feuilleStrike, fiche: feuilleFiche, corriger: (id, i) => feuilleCorrection(id, Number(i)),
+    bfiltre: (g, v) => { bilan[g] = v; if (g === 'per') store.set('td_bper', v); rendreStats(); },
     caisse: feuilleCaisse, depot: () => feuilleMouvement('depot'), retrait: () => feuilleMouvement('retrait'), comparer: feuilleComparer,
     cle: () => { fermer(); deconnecter(''); }, effacer: () => { fermer(); deconnecter('Clé effacée de ce téléphone.'); } };
   document.addEventListener('click', (e) => {
