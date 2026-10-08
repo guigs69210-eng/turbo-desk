@@ -435,9 +435,14 @@
     afficherOnglet(tabCourant); actualiser();
   }
   $('token-save').onclick = () => {
-    const v = $('token-in').value.trim();
-    if (!/^(github_pat_|ghp_)[A-Za-z0-9_]+$/.test(v)) { $('login-err').textContent = 'Cette clé n\'a pas la bonne forme.'; return; }
-    token = v; store.set('td_token', v); $('token-in').value = ''; $('login-err').textContent = ''; connecte();
+    // Tolérant : retire espaces, retours à la ligne, guillemets et « Bearer ». C'est GitHub qui dit si la clé est bonne.
+    const v = $('token-in').value.replace(/^\s*(bearer|token)\s+/i, '').replace(/[\s"'`«»“”]+/g, '');
+    if (v.length < 20 || !/^[A-Za-z0-9_\-]+$/.test(v)) {
+      $('login-err').textContent = v.length < 20 ? 'Clé trop courte : copiez-la en entier (elle commence par github_pat_ ou ghp_).' : 'Cette clé contient des caractères inattendus. Recopiez-la depuis GitHub.';
+      return;
+    }
+    if (!/^(github_pat_|ghp_)/.test(v)) $('login-err').textContent = 'Attention : la clé GitHub commence d\'habitude par github_pat_ ou ghp_. Essai quand même…';
+    token = v; store.set('td_token', v); $('token-in').value = ''; connecte();
   };
   $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) afficherOnglet(b.dataset.tab); };
   $('refresh').onclick = () => { store.del('td_dispatch'); actualiser(true); };
