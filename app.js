@@ -66,14 +66,15 @@
     const out = await r.json();
     journal = nouveau; journalSha = out.content.sha;
   }
-  async function lancerCours() {
-    const r = await fetch(`https://api.github.com/repos/${BRIEF}/actions/workflows/quotes.yml/dispatches`, {
+  async function lancerWorkflow(fichier) {
+    const r = await fetch(`https://api.github.com/repos/${BRIEF}/actions/workflows/${fichier}/dispatches`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ ref: 'main' }),
     });
     return r.status === 204;
   }
+  const lancerCours = () => lancerWorkflow('quotes.yml');
 
   /* ---------- fraîcheur : âge réel des cours ---------- */
   const ageMin = () => (quotes && quotes.generated_at ? (Date.now() - Date.parse(quotes.generated_at)) / 60000 : null);
@@ -108,8 +109,24 @@
   // `force` : bouton ↻. Sinon pas de relance hors séance (économise les minutes GitHub Actions).
   async function actualiser(force) {
     await charger();
+    if (journal) veilleDuJour();
     const a = ageMin(), seance = ['NQ=F', '^FCHI', '^GSPC'].some((t) => C.seanceOuverte(t, Date.now()));
     if (a != null && a > FRAICHEUR_MAX_MIN && !attente && (seance || force)) await relancerEtAttendre();
+  }
+  // Veille : jour ouvré, pas encore du jour (heure de Paris) → on relance daily.yml, une fois par jour.
+  async function veilleDuJour() {
+    const p = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+    if (p.getDay() === 0 || p.getDay() === 6) return;
+    const jour = new Date(Date.now()).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
+    if (daily && daily.date_paris === jour) return;
+    if (store.get('td_daily') === jour) return;
+    store.set('td_daily', jour);
+    try { if (!(await lancerWorkflow('daily.yml'))) return; } catch (e) { return; }
+    const avant = daily ? daily.generated_at : null;
+    for (let t = 0; t < 90; t += 10) {
+      await new Promise((r) => setTimeout(r, 10000));
+      try { const d = await lire('daily/latest.json'); if (d.generated_at !== avant) { daily = d; rendre(); return; } } catch (e) { /* on réessaie */ }
+    }
   }
   async function relancerEtAttendre() {
     const dernier = Number(store.get('td_dispatch') || 0);
