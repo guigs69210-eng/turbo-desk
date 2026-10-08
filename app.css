@@ -108,3 +108,7 @@ summary{min-height:44px;display:flex;align-items:center;color:var(--blue);font-w
 .stickybar{position:sticky;bottom:calc(-16px - env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);margin:8px -16px 0;padding:8px 16px calc(8px + env(safe-area-inset-bottom))}
 .stickybar .calc{margin:0 0 8px;font-size:14px}
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.hero{grid-template-columns:1fr auto;gap:4px 12px;padding:10px 14px;align-items:baseline}
+.hero b{font-size:20px;font-weight:800;white-space:nowrap}
+.hero-r{text-align:right}
+.hero .lbl{margin-right:6px}

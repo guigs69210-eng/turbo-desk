@@ -179,12 +179,9 @@
     const posHtml = ouv.length ? ouv.map(({ p, s }) => cartePosition(p, s, true)).join('') : '<div class="card"><p class="muted">Aucune position ouverte.</p></div>';
     const trou = (journal.trous || [])[0];
     $('tab-today').innerHTML = alertesHtml +
-      `<div class="card hero"><div class="span2"><div class="lbl">Valeur totale (caisse + positions)</div><div class="big num">${eur(C.valeurTotale(journal, sv))}</div></div>
-        <div><div class="lbl">Caisse</div><div class="num val">${eur(C.cash(journal))}</div></div>
-        <div><div class="lbl">Engagé</div><div class="num val">${eur(engage)}</div></div>
-        <div><div class="lbl">Réalisé aujourd'hui</div><div class="num val ${cls(realise)}">${eur(realise, { signe: true })}</div></div>
-        <div><div class="lbl">Latent (${ouv.length})</div><div class="num val ${cls(latent)}">${eur(latent, { signe: true })}</div></div>
-        <div class="span2"><button class="btn ghost small" data-act="caisse">Caisse : dépôt, retrait, comparer</button></div></div>` +
+      `<div class="card hero"><div class="hero-l"><span class="lbl">Total</span><b class="num">${eur(C.valeurTotale(journal, sv))}</b></div>
+        <div class="hero-r"><span class="lbl">Latent (${ouv.length})</span><b class="num ${cls(latent)}">${eur(latent, { signe: true })}</b></div>
+        <div class="span2 lbl num">Caisse ${eur(C.cash(journal))} · Engagé ${eur(engage)} · Jour <span class="${cls(realise)}">${eur(realise, { signe: true })}</span></div></div>` +
       `<h2 class="sect">Positions ouvertes</h2>${posHtml}` +
       `<div class="card"><h2>Annonces</h2>${agenda}</div>` +
       `<div class="card"><h2>Marchés</h2><div class="ticker">${tk('Nasdaq 100', 'NQ=F')}${tk('CAC 40', '^FCHI')}${tk('S&P 500', '^GSPC')}${tk('VIX', '^VIX', 2)}${tk('EUR/USD', 'EURUSD=X', 4)}</div></div>` +
@@ -232,15 +229,13 @@
     const fermees = tous.filter((x) => (!jMois || (x.s.date_sortie || '').startsWith(jMois)) && (!jSj || C.cleSousJacent(x.p.sous_jacent) === jSj))
       .sort((a, b) => String(b.s.date_sortie || '').localeCompare(String(a.s.date_sortie || '')));
     const total = fermees.reduce((t, x) => t + x.s.pnl_realise, 0);
-    const lignes = ((journal.cash && journal.cash.lignes) || []).slice().reverse().slice(0, 8);
     const filtres = `<div class="grid2"><label>Mois<select id="j-mois"><option value="">Tous</option>${mois.map((m) => `<option value="${m}" ${m === jMois ? 'selected' : ''}>${m.slice(5)}/${m.slice(0, 4)}</option>`).join('')}</select></label>
       <label>Sous-jacent<select id="j-sj"><option value="">Tous</option>${Object.entries(SJ_NOM).map(([k, n]) => `<option value="${k}" ${k === jSj ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>`;
     $('tab-journal').innerHTML = filtres +
       (fermees.length ? `<div class="card"><div class="list-row" style="border:0"><span class="lbl">${fermees.length} trade${fermees.length > 1 ? 's' : ''}</span><b class="num ${cls(total)}">${eur(total, { signe: true })}</b></div>` + fermees.map(({ p, s }) =>
         `<button class="list-row ligne-btn" data-act="fiche" data-id="${esc(p.id)}"><span class="l"><span class="t">${esc(p.libelle)}${s.doublon_probable ? '<span class="tag">doublon ?</span>' : ''}${s.incomplet ? '<span class="tag">incomplet</span>' : ''}</span>
           <span class="s">${jj(s.date_entree)} → ${jj(s.date_sortie)}</span></span>
-          <b class="num ${cls(s.pnl_realise)}">${eur(s.pnl_realise, { signe: true })}</b></button>`).join('') + '</div>' : '<div class="empty">Aucun trade pour ce choix.</div>') +
-      `<div class="card"><h2>Mouvements de caisse</h2>${lignes.map((l) => `<div class="list-row"><span class="l"><span class="t">${esc({ depot: 'Dépôt', retrait: 'Retrait', ajustement: 'Ajustement' }[l.type] || l.type)}</span><span class="s">${jj(l.date)}${l.note ? ' · ' + esc(l.note) : ''}</span></span><b class="num ${cls(l.montant_eur)}">${eur(l.montant_eur, { signe: true })}</b></div>`).join('') || '<p class="muted">Aucun.</p>'}</div>`;
+          <b class="num ${cls(s.pnl_realise)}">${eur(s.pnl_realise, { signe: true })}</b></button>`).join('') + '</div>' : '<div class="empty">Aucun trade pour ce choix.</div>');
   }
 
   function rendreStats() {
