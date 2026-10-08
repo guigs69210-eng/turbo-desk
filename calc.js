@@ -306,8 +306,7 @@
     const a = [];
     for (const { p, s } of suivis.filter((x) => x.s.statut === 'ouverte')) {
       if (s.stop_touche) a.push({ niveau: 'rouge', texte: `Stop touché : ${p.libelle}` });
-      else if (s.distance_barriere_pct != null && s.distance_barriere_pct < 1) a.push({ niveau: 'rouge', texte: `Barrière à ${nb2(s.distance_barriere_pct)} % : ${p.libelle}` });
-      else if (s.distance_barriere_pct != null && s.distance_barriere_pct < 2) a.push({ niveau: 'orange', texte: `Barrière à ${nb2(s.distance_barriere_pct)} % : ${p.libelle}` });
+      // alertes de barrière retirées à la demande de Guillaume (08/10) : la marge reste affichée sur les cartes
       const k = cleSousJacent(p.sous_jacent), q = k && quotes && quotes.quotes && quotes.quotes[SOUS_JACENTS[k].quote];
       if (q && q.quote_time && seanceOuverte(SOUS_JACENTS[k].quote, maintenant)) {
         const age = Math.round((maintenant - Date.parse(q.quote_time)) / 60000);
