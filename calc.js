@@ -279,9 +279,13 @@
   // Annonces à venir (dans `heures` heures), triées.
   function annoncesProches(calendrier, maintenant, heures) {
     const now = maintenant, lim = now + heures * 3600000;
-    return (calendrier || []).map((e) => ({ ...e, ms: parisVersMs(e.date, e.heure_paris) })).filter((e) => e.ms >= now - 15 * 60000 && e.ms <= lim).sort((a, b) => a.ms - b.ms);
+    // Une ligne « toute la journée » (sans heure) reste visible jusqu'au soir.
+    return (calendrier || []).map((e) => ({ ...e, ms: parisVersMs(e.date, e.heure_paris || '23:59') })).filter((e) => e.ms >= now - 15 * 60000 && e.ms <= lim).sort((a, b) => a.ms - b.ms);
   }
-  const estFOMC = (e) => /FOMC/i.test(e.nom || '');
+  const estFOMC = (e) => /FOMC décision/i.test(e.nom || '') || (/FOMC/i.test(e.nom || '') && e.majeure);
+  // Annonce majeure (FOMC, CPI, emploi, PCE, BCE) : être à plat. Ancien format sans champ : majeure.
+  const estMajeure = (e) => e.majeure !== false && (!e.type || e.type === 'macro');
+  const estForte = (e) => e.impact === 'fort' && e.type === 'macro' && !estMajeure(e);
   // Période FOMC : de la veille de la réunion (2 jours) jusqu'à la décision.
   function enPeriodeFOMC(calendrier, maintenant) {
     const j = Date.parse(jourParis(maintenant));
@@ -314,7 +318,10 @@
       }
     }
     const ouvert = suivis.some((x) => x.s.statut === 'ouverte');
-    for (const e of annoncesProches(calendrier, maintenant, 2)) a.push({ niveau: ouvert ? 'rouge' : 'orange', texte: `${e.nom} à ${e.heure_paris}${ouvert ? ' : être à plat avant' : ''}` });
+    for (const e of annoncesProches(calendrier, maintenant, 2)) {
+      if (estMajeure(e)) a.push({ niveau: ouvert ? 'rouge' : 'orange', texte: `${e.nom} à ${e.heure_paris}${ouvert ? ' : être à plat avant' : ''}` });
+      else if (estForte(e)) a.push({ niveau: 'orange', texte: `${e.nom} à ${e.heure_paris} : prudence` });
+    }
     return a;
   }
   const nb2 = (x) => Math.round(x * 100) / 100;
@@ -338,7 +345,7 @@
     const ouvertes = (journal.positions || []).map(bilanPosition).filter((b) => b.statut === 'ouverte');
     const engage = ouvertes.reduce((t, b) => t + (b.cout_restant || 0), 0);
     if (isNum(R.poche_eur) && isNum(mise) && engage + mise > R.poche_eur) w.push(`Au-dessus de la poche : ${Math.round(engage + mise)} € engagés pour ${R.poche_eur} €.`);
-    for (const e of annoncesProches(calendrier, maintenant, 3)) w.push(`${e.nom} à ${e.heure_paris} : ${e.regle || 'à plat avant'}.`);
+    for (const e of annoncesProches(calendrier, maintenant, 3).filter(estMajeure)) w.push(`${e.nom} à ${e.heure_paris} : ${e.regle || 'à plat avant'}.`);
     return w;
   }
 
@@ -370,7 +377,7 @@
 
   const Calc = { REGLES, configurer, FINANCEMENT, SOUS_JACENTS, cleSousJacent, devisePosition, montantExecution, bilanPosition,
     strikeDuJour, valeurTheorique, levier, distanceBarriere, prixCourant, suiviPosition, dimensionner,
-    ratioGainRisque, cash, stats, formatEur, actives, parisVersMs, jourParis, heureParis, annoncesProches, enPeriodeFOMC,
+    ratioGainRisque, cash, stats, formatEur, actives, parisVersMs, jourParis, heureParis, annoncesProches, enPeriodeFOMC, estMajeure,
     marcheOuvert, seanceOuverte, alertes, verifierRegles, realiseDuJour, valeurTotale };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Calc;

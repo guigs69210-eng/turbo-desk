@@ -133,3 +133,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 .barres span{font-size:11px;color:var(--muted);text-align:center;white-space:nowrap;overflow:visible;margin-top:3px;height:14px}
 .rep{display:grid;grid-template-columns:auto 1fr auto;gap:2px 8px;align-items:baseline;padding:6px 0}
 .rep .bar{grid-column:1/-1;height:6px}
+.ann-jour{font-size:13px;font-weight:600;color:var(--muted);margin-top:10px;text-transform:capitalize}
+.ann-jour:first-child{margin-top:0}
+.list-row.ann{padding-left:14px;position:relative}
+.list-row.ann::before{content:"";position:absolute;left:0;top:50%;width:8px;height:8px;margin-top:-4px;border-radius:50%;background:var(--amber)}
+.list-row.ann.fort::before{background:var(--red)}
+.list-row.ann.majeure .t{color:var(--red)}

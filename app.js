@@ -188,11 +188,14 @@
     const pea = [['LVMH', 'MC.PA'], ['Stellantis', 'STLAP.PA'], ['TotalEnergies', 'TTE.PA'], ['Air Liquide', 'AI.PA'], ['Schneider', 'SU.PA'], ['LQQ', 'LQQ.PA']]
       .map(([n, t]) => { const q = px(t); return `<div class="list-row"><span class="t">${n}</span><span class="num">${q ? nb(q.price, 2) + ' € <span class="' + cls(q.change_pct) + '">' + pct(q.change_pct, true) + '</span>' : '—'}</span></div>`; }).join('');
     const inst = daily && daily.instruments ? Object.entries(daily.instruments).map(([n, i]) => `<div class="list-row"><span class="l"><span class="t">${esc(n)}</span><span class="s num">Pivot ${nb(i.pivots.P)} · R1 ${nb(i.pivots.R1)} · S1 ${nb(i.pivots.S1)}</span></span><span class="num s">ATR ${nb(i.atr14_pct, 2)} %</span></div>`).join('') : '';
-    const prochaines = C.annoncesProches(calendrier(), now, 24 * 14).slice(0, 4);
+    // Annonces des 7 prochains jours, groupées par jour ; pastille rouge = fort, orange = moyen.
+    const prochaines = C.annoncesProches(calendrier(), now, 24 * 7);
+    let jourVu = '';
     const agenda = prochaines.length ? prochaines.map((e) => {
-      const jour = C.jourParis(e.ms), quand = jour === auj() ? 'Aujourd\'hui' : jj(jour);
-      return `<div class="list-row"><span class="l"><span class="t">${esc(e.nom)}</span><span class="s">${esc(e.regle || '')}</span></span><span class="num ${jour === auj() ? 'warn' : ''}">${quand} ${e.heure_paris}</span></div>`;
-    }).join('') : '<p class="muted">Rien dans les 14 prochains jours.</p>';
+      const jour = C.jourParis(e.ms), titre = jour === jourVu ? '' : `<div class="ann-jour${jour === auj() ? ' warn' : ''}">${jour === auj() ? 'Aujourd\'hui' : new Date(jour + 'T12:00:00Z').toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit', timeZone: 'UTC' })}</div>`;
+      jourVu = jour;
+      return titre + `<div class="list-row ann ${e.impact === 'moyen' ? 'moyen' : 'fort'}${C.estMajeure(e) ? ' majeure' : ''}"><span class="l"><span class="t">${esc(e.nom)}</span><span class="s">${esc(e.regle || '')}</span></span><span class="num">${e.heure_paris || 'journée'}</span></div>`;
+    }).join('') : '<p class="muted">Rien dans les 7 prochains jours.</p>';
     const posHtml = ouv.length ? ouv.map(({ p, s }) => cartePosition(p, s, true)).join('') : '<div class="card"><p class="muted">Aucune position ouverte.</p></div>';
     const trou = (journal.trous || [])[0];
     $('tab-today').innerHTML = alertesHtml +
@@ -200,7 +203,7 @@
         <div class="hero-r"><span class="lbl">Latent (${ouv.length})</span><b class="num ${cls(latent)}">${eur(latent, { signe: true })}</b></div>
         <div class="span2 lbl num">Caisse ${eur(C.cash(journal))} · Engagé ${eur(engage)} · Jour <span class="${cls(realise)}">${eur(realise, { signe: true })}</span></div></div>` +
       `<h2 class="sect">Positions ouvertes</h2>${posHtml}` +
-      `<div class="card"><h2>Annonces</h2>${agenda}</div>` +
+      `<div class="card"><h2>Annonces (7 jours)</h2>${agenda}</div>` +
       `<div class="card"><h2>Marchés</h2><div class="ticker">${tk('Nasdaq 100', 'NQ=F')}${tk('CAC 40', '^FCHI')}${tk('S&P 500', '^GSPC')}${tk('VIX', '^VIX', 2)}${tk('EUR/USD', 'EURUSD=X', 4)}</div></div>` +
       (inst ? `<div class="card"><h2>Veille (${jj(daily.date_paris)})</h2>${inst}</div>` : '') +
       `<div class="card"><h2>PEA</h2>${pea}</div>` +
