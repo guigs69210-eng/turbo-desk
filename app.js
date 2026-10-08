@@ -98,13 +98,21 @@
       [jm, quotes, daily, reco, scores] = await Promise.all([lireMeta('journal.json'), lire('quotes/latest.json'), lire('daily/latest.json').catch(() => null),
         lire('reco/latest.json').catch(() => null), lire('reco/scores.json').catch(() => null)]);
       journal = jm.data; journalSha = jm.sha;
+      store.set('td_cache', JSON.stringify({ t: Date.now(), jm, quotes, daily, reco, scores }));
       C.configurer(journal.regles || {});
       majFraicheur(); rendre();
     } catch (e) {
       if (e.status === 401) deconnecter('Clé refusée (expirée ou fausse). Collez-en une autre.');
       else if (e.status === 403) majFraicheur('GitHub refuse l\'accès (droits de la clé ou trop de demandes) : réessayez');
       else if (e.status === 404) majFraicheur('Fichier introuvable sur turbo-brief (branche data)');
-      else majFraicheur('Pas de réseau');
+      else if (!journal && store.get('td_cache')) {
+        try {
+          const c = JSON.parse(store.get('td_cache'));
+          ({ quotes, daily, reco, scores } = c); journal = c.jm.data; journalSha = c.jm.sha;
+          C.configurer(journal.regles || {}); rendre();
+          majFraicheur('Hors ligne : données du ' + new Date(c.t).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }));
+        } catch (x) { majFraicheur('Pas de réseau'); }
+      } else majFraicheur('Pas de réseau');
     } finally { btn.classList.remove('spin'); }
   }
   // `force` : bouton ↻. Sinon pas de relance hors séance (économise les minutes GitHub Actions).
@@ -297,6 +305,34 @@
   const lundi = (jour) => decaler(jour, -((new Date(jour + 'T12:00:00Z').getUTCDay() + 6) % 7));
   const puce = (grp, v, txt, actif) => `<button class="puce" data-act="bfiltre" data-id="${grp}" data-i="${v}" aria-pressed="${actif}">${txt}</button>`;
 
+  // Bilan de la semaine en cours + agenda de demain.
+  function carteSemaineEnCours() {
+    const j = auj(), l = lundi(j), dem = decaler(j, 1);
+    const tr = suivis().filter((x) => x.s.statut === 'fermee' && x.s.date_sortie && x.s.date_sortie >= l && x.s.date_sortie <= j);
+    const tot = tr.reduce((t, x) => t + x.s.pnl_realise, 0);
+    const non = tr.filter((x) => (x.p.executions || []).some((e) => !e.annulee && e.regle_respectee === false)).length;
+    const ag = calendrier().filter((e) => e.date === dem).sort((a, b) => String(a.heure_paris).localeCompare(String(b.heure_paris)));
+    return `<div class="card"><h2>Cette semaine</h2><div class="list-row" style="border:0;padding:0"><span>${tr.length} trade${tr.length > 1 ? 's' : ''} fermé${tr.length > 1 ? 's' : ''}</span><b class="num ${cls(tot)}">${eur(tot, { signe: true })}</b></div>
+      <p class="muted">${tr.length ? (non ? non + ' avec une règle non tenue.' : 'Toutes les règles tenues.') : 'Rien de fermé pour l\'instant.'}</p>
+      <p class="lbl">Demain (${jj(dem)})</p>${ag.length ? ag.map((e) => `<div class="list-row"><span>${esc(e.heure_paris || '')} ${esc(e.nom)}</span></div>`).join('') : '<p class="muted">Aucune annonce.</p>'}</div>`;
+  }
+  // Export des plus-values de l'année (CSV lisible par un tableur, UTF-8 avec BOM).
+  function carteExport() {
+    const ans = [...new Set(suivis().filter((x) => x.s.statut === 'fermee' && x.s.date_sortie).map((x) => x.s.date_sortie.slice(0, 4)))].sort().reverse();
+    if (!ans.length) return '';
+    return `<div class="card"><h2>Export impôts</h2><p class="muted">Plus-values par trade fermé, pour le tableur. À vérifier avec votre déclaration.</p><div class="puces">${ans.map((a) => `<button class="puce" data-act="export" data-id="${a}">${a}</button>`).join('')}</div></div>`;
+  }
+  function exporterAnnee(an) {
+    const f = (v) => (v == null ? '' : String(v).replace('.', ','));
+    const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lignes = suivis().filter((x) => x.s.statut === 'fermee' && (x.s.date_sortie || '').startsWith(an)).sort((a, b) => a.s.date_sortie.localeCompare(b.s.date_sortie));
+    const csv = [['Date de sortie', 'Date d\'entrée', 'Produit', 'Sens', 'Prix de revient (€)', 'Produit de cession (€)', 'Plus-value (€)', 'Doublon probable'].join(';'),
+      ...lignes.map(({ p, s }) => [s.date_sortie, s.date_entree || '', q(p.sous_jacent), sensDe(p), f(s.investi), f(s.recupere), f(s.pnl_realise), s.doublon_probable ? 'oui' : ''].join(';')),
+      ['Total', '', '', '', f(lignes.reduce((t, x) => t + x.s.investi, 0).toFixed(2)), f(lignes.reduce((t, x) => t + x.s.recupere, 0).toFixed(2)), f(lignes.reduce((t, x) => t + x.s.pnl_realise, 0).toFixed(2)), ''].join(';')].join('\r\n');
+    const url = URL.createObjectURL(new Blob(['\ufeff', new TextEncoder().encode(csv)], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'plus-values-' + an + '.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
   function rendreStats() {
     const debut = bilan.per ? decaler(auj(), 1 - Number(bilan.per)) : '';
     const tr = suivis().filter(({ p, s }) => s.statut === 'fermee' && s.date_sortie && (!debut || s.date_sortie >= debut)
@@ -311,8 +347,9 @@
       <div class="puces">${[['', 'Call et Put'], ['CALL', 'Call'], ['PUT', 'Put']].map(([v, t]) => puce('sens', v, t, bilan.sens === v)).join('')}
         <select id="b-sj" aria-label="Sous-jacent"><option value="">Tous</option>${Object.entries(SJ_NOM).map(([k, n]) => `<option value="${k}" ${k === bilan.sj ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
       <label class="check"><input type="checkbox" id="b-doub" ${bilan.doub ? 'checked' : ''}>Sans les doublons probables</label>`;
-    const cr = carteRecos();
-    if (!tr.length) { $('tab-stats').innerHTML = filtres + '<div class="empty">Aucun trade fermé sur ce choix.</div>' + cr; return; }
+    const cr = carteRecos() + carteExport();
+    const sem = carteSemaineEnCours();
+    if (!tr.length) { $('tab-stats').innerHTML = sem + filtres + '<div class="empty">Aucun trade fermé sur ce choix.</div>' + cr; return; }
     const tuile = (n, v, k) => `<div class="tuile"><span class="lbl">${n}</span><b class="num ${k || ''}">${v}</b></div>`;
     const sp = somme(pe), pf = sp < 0 ? somme(g) / -sp : null;
     const tuiles = `<div class="tuiles">${tuile('Résultat', eur(total, { signe: true }), cls(total))}${tuile('Trades', tr.length)}${tuile('Gagnants', nb((g.length / tr.length) * 100, 0) + ' %')}
@@ -345,7 +382,12 @@
       return `<div class="card"><h2>${titre}</h2>${l.map((x) => `<div class="rep"><span class="t">${x.n}</span><span class="lbl num">${x.nb} · ${nb(x.gp, 0)} % gagnants</span><b class="num ${cls(x.tot)}">${eur(x.tot, { signe: true })}</b>
         <div class="bar"><i style="width:${(Math.abs(x.tot) / m) * 100}%;background:${x.tot >= 0 ? 'var(--green)' : 'var(--red)'}"></i></div></div>`).join('')}</div>`;
     };
-    $('tab-stats').innerHTML = filtres + tuiles + carteCourbe + carteBarres +
+    // durée de détention et règles tenues
+    const duree = (x) => { const a = x.s.date_entree, b = x.s.date_sortie; const j = a && b ? Math.round((Date.parse(b) - Date.parse(a)) / 86400000) : null; return j == null ? '?' : j <= 0 ? 'J0' : j <= 5 ? 'J1' : 'J6'; };
+    const reglesDe = (p) => { const l = (p.executions || []).filter((e) => !e.annulee && e.regle_respectee != null); return !l.length ? 'NR' : l.every((e) => e.regle_respectee) ? 'OUI' : 'NON'; };
+    const carteDuree = repart('Durée en position', [['J0', 'Même jour'], ['J1', '1 à 5 jours'], ['J6', '6 jours et plus'], ['?', 'Date inconnue']], (p) => duree(tr.find((x) => x.p === p)));
+    const carteRegles = repart('Règles tenues', [['OUI', 'Oui'], ['NON', 'Non'], ['NR', 'Non renseigné']], reglesDe);
+    $('tab-stats').innerHTML = sem + filtres + tuiles + carteCourbe + carteBarres + carteDuree + carteRegles +
       (bilan.sens ? '' : repart('Call ou Put', [['CALL', 'Call'], ['PUT', 'Put']], sensDe)) +
       (bilan.sj ? '' : repart('Par sous-jacent', [...Object.entries(SJ_NOM), ['AUTRE', 'Autres']], (p) => C.cleSousJacent(p.sous_jacent) || 'AUTRE')) + carteSemaine +
       cr + ((journal.trous || []).length ? '<p class="trou">' + journal.trous.map((t) => esc(t.message)).join('<br>') + '</p>' : '');
@@ -383,7 +425,7 @@
     window.scrollTo(0, 0);
   }
   function deconnecter(msg) {
-    token = ''; store.del('td_token'); store.del('td_exp'); store.del('td_exp_user'); journal = quotes = daily = reco = scores = null;
+    token = ''; store.del('td_cache'); store.del('td_token'); store.del('td_exp'); store.del('td_exp_user'); journal = quotes = daily = reco = scores = null;
     $('login').hidden = false; $('tabs').hidden = true; $('fab').hidden = true; $('settings').hidden = true;
     document.querySelectorAll('.tab').forEach((s) => { s.hidden = true; });
     $('login-err').textContent = msg || '';
@@ -772,7 +814,7 @@
   }
 
   /* ---------- actions des boutons (écrans et feuilles) ---------- */
-  const ACTIONS = { vente: feuilleVente, prix: feuillePrix, strike: feuilleStrike, fiche: feuilleFiche, corriger: (id, i) => feuilleCorrection(id, Number(i)),
+  const ACTIONS = { export: (an) => exporterAnnee(an), vente: feuilleVente, prix: feuillePrix, strike: feuilleStrike, fiche: feuilleFiche, corriger: (id, i) => feuilleCorrection(id, Number(i)),
     bfiltre: (g, v) => { bilan[g] = v; if (g === 'per') store.set('td_bper', v); rendreStats(); },
     reco: (id, i) => { const idee = reco && reco.idees && reco.idees[Number(i)]; if (idee) feuilleTrade({ idee, k: Number(i), date: reco.date, sj: C.cleSousJacent(idee.indice) || 'NQ' }); },
     caisse: feuilleCaisse, depot: () => feuilleMouvement('depot'), retrait: () => feuilleMouvement('retrait'), comparer: feuilleComparer,
