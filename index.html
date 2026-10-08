@@ -29,7 +29,11 @@
     <details><summary>Où trouver ma clé ?</summary>
       <p class="muted">Sur github.com : Settings → Developer settings → Personal access tokens → Fine-grained tokens. Dépôt turbo-brief : Contents en lecture et écriture, Actions en écriture. Notez la date d'expiration.</p>
       <p class="muted">Sur iPhone, l'app ajoutée à l'écran d'accueil ne voit pas la clé collée dans Safari : collez-la dans l'app installée.</p></details>
-    <input id="token-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Clé GitHub" placeholder="github_pat_…">
+    <div class="champ-oeil">
+      <input id="token-in" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Clé GitHub" placeholder="github_pat_…">
+      <button type="button" class="oeil" id="token-oeil" aria-label="Afficher la clé" aria-pressed="false">👁</button>
+    </div>
+    <p class="muted" id="token-info" aria-live="polite"></p>
     <button class="btn" id="token-save">Enregistrer</button>
     <p class="err" id="login-err" role="alert"></p>
   </section>

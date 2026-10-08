@@ -143,3 +143,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 .reco .idee:first-of-type{border-top:0;margin-top:4px;padding-top:0}
 .reco .idee.vieille{opacity:.85}
 .reco .s{font-size:13px;color:var(--muted);margin:4px 0}
+
+.champ-oeil{position:relative}
+.champ-oeil input{padding-right:56px;margin-bottom:6px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px}
+.oeil{position:absolute;right:4px;top:8px;width:44px;height:44px;border:0;border-radius:10px;background:none;color:var(--text);font-size:22px;opacity:.75}
+.oeil[aria-pressed=true]{opacity:1;background:var(--surface);outline:2px solid var(--blue)}
+#token-info{font-size:13px;min-height:1.3em;margin-bottom:10px}

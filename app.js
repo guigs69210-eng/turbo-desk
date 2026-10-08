@@ -434,6 +434,17 @@
     $('login').hidden = true; $('tabs').hidden = false; $('fab').hidden = false; $('settings').hidden = false;
     afficherOnglet(tabCourant); actualiser();
   }
+  // Œil : afficher / masquer la clé collée, et dire combien de caractères elle compte (sans la nettoyer à l'écran).
+  $('token-oeil').onclick = () => {
+    const vu = $('token-in').type === 'password';
+    $('token-in').type = vu ? 'text' : 'password';
+    $('token-oeil').setAttribute('aria-pressed', String(vu)); $('token-oeil').setAttribute('aria-label', vu ? 'Masquer la clé' : 'Afficher la clé');
+    $('token-oeil').textContent = vu ? '🙈' : '👁';
+  };
+  $('token-in').addEventListener('input', () => {
+    const v = $('token-in').value, n = v.replace(/\s+/g, '').length;
+    $('token-info').textContent = n ? `${n} caractères · début « ${v.trim().slice(0, 11)} » · fin « ${v.trim().slice(-4)} »` : '';
+  });
   $('token-save').onclick = () => {
     // Tolérant : retire espaces, retours à la ligne, guillemets et « Bearer ». C'est GitHub qui dit si la clé est bonne.
     const v = $('token-in').value.replace(/^\s*(bearer|token)\s+/i, '').replace(/[\s"'`«»“”]+/g, '');
@@ -442,7 +453,7 @@
       return;
     }
     if (!/^(github_pat_|ghp_)/.test(v)) $('login-err').textContent = 'Attention : la clé GitHub commence d\'habitude par github_pat_ ou ghp_. Essai quand même…';
-    token = v; store.set('td_token', v); $('token-in').value = ''; connecte();
+    token = v; store.set('td_token', v); $('token-in').value = ''; $('token-in').type = 'password'; $('token-info').textContent = ''; connecte();
   };
   $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) afficherOnglet(b.dataset.tab); };
   $('refresh').onclick = () => { store.del('td_dispatch'); actualiser(true); };
